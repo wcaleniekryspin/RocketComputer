@@ -1,6 +1,7 @@
 #ifndef RAKIETA_H
 #define RAKIETA_H
 
+#include <sys/_stdint.h>
 #include <stdlib.h>
 #include <Arduino.h>
 #include <Wire.h>
@@ -146,7 +147,7 @@ private:
     } adxl;
     struct {
       uint8_t valid = 0;
-      float altitude = 0;
+      float alti = 0;
     } bmp1, bmp2;
   } offsets;
 
@@ -264,7 +265,7 @@ private:
   // === Flash ===
   uint16_t flashWriteCount = 0;
   uint32_t dumpAddress = 0;
-  String currentFileName;
+  // String currentFileName;
   File32 flashDataFile;
   File32 dumpFile;
   Adafruit_FlashTransport_SPI flashTransport;
@@ -280,63 +281,21 @@ private:
   uint32_t lastFlightModeLoop = 0;
 
 
-
-/*
-  // === Obsługa elektrozaworów ===
-  uint32_t solenoidDrogueStartTime;
-  uint8_t solenoidDroguePulsesRemaining;
-  uint32_t solenoidDroguePulseDuration;
-  uint32_t solenoidDroguePulseInterval;
-  bool drogueDeployed;         // czy główny spadochron już otwarty?
-  uint32_t drogueDeployedTime;
-  uint32_t solenoidMainStartTime;
-  uint8_t solenoidMainPulsesRemaining;
-  uint32_t solenoidMainPulseDuration;
-  uint32_t solenoidMainPulseInterval;
-  bool mainDeployed;           // czy główny spadochron już otwarty?
-  uint32_t mainDeployedTime;
-
-  // === Filtry (do filtrów dolnoprzepustowych) ===
-  float filteredAccelX, filteredAccelY, filteredAccelZ;
-  float filteredGyroX, filteredGyroY, filteredGyroZ;
-
-  // === Do fuzji BMP + IMU ===
-  float fusedAltitude;
-  float prevFusedAltitude;
-  float verticalAccelFused;   // przyspieszenie pionowe po odfiltrowaniu
-
-  // === Buzzer ===
-  bool buzzerState;
-  bool buzzerEnabled;
-  bool buzzerActive;
-  uint32_t buzzerStartTime;
-  uint16_t buzzerActiveTime;
-  uint32_t lastBuzzerTime = 0;
-  uint32_t buzzerInterval = BUZZER_INTERVAL_DEBUG;
-
-
-  // === Flash ===
-  uint16_t flashWriteCount;
-  bool flashReady = false;
-  uint32_t fileNumber = 0;
-
-*/
-
   void initGPIO();
   void initSPI();
   bool initLSM();
   bool initADXL();
   bool initBMP();
   bool initGPS();
-  void updateLeds(uint32_t now);
-  void updateBuzzer(uint32_t now);
-  void updateSolenoid(uint32_t now);
+  void updateLeds(const uint32_t now);
+  void updateBuzzer(const uint32_t now);
+  void updateSolenoid(const uint32_t now);
   void systemReset();
-  void systemSleep(uint32_t time);
+  void systemSleep(const uint32_t time);
   void setSystemMode();
   void printSystemMode();
-  void printFlightMode();
-  void handleBattery();
+  void printFlightMode();  /// prawdopodobnie do usunięcia bo nigdzie nie będzie używane
+  void handleBattery();  // tzreba sprawdzić czy odpowiednie są przeliczniki
   void handleLsm();
   void handleAdxl();
   void handleBmp();
@@ -346,54 +305,49 @@ private:
   void setOffsets();
   String prepareOffsetsMsg();
   String prepareDataLineMsg();
-  void filterAcceleration();
-  void filterGyro();
-  void calculateOrientation();
-  void fuseBMPAndIMU();
+  void filterAcceleration();  /// nigdzie nie używane
+  void filterGyro();  /// nigdzie nie używane
+  void calculateOrientation();  /// nigdzie nie używane
+  void fuseBMPAndIMU();  /// nigdzie nie używane
   bool initLora();
   String prepareLoraStatusMsg();
   void preparePacket();
   void sendPacket();
-  void transmit(String msg);
-  void transmit(uint8_t *msg, size_t len);
+  void transmit(String& msg);
+  void transmit(const uint8_t *msg, const size_t len);
   void startListening();
-  void handleCommand(String command);
+  void handleCommand(const String& command);  /// trzeba pododawać komendy
   void checkRadio();
   void sendGpsOffset();
   bool initFlash();
   bool flashFindNextFileNumber();
   bool flashOpenNewFile();
-  void flashWriteData(const String& data);
+  void flashWriteString(const String& msg);
   void flashFlushBuffer();
   void flashCloseFile();
-  bool flashRecoverAfterReset();
+  bool flashRecoverAfterReset();  /// wydaje mi się, że trzeba by było zmienić bo te funkcje istnieją ?
   void flashDumpFileList();
-  void flashDumpFileData(uint16_t fileNumber);
+  void flashDumpFileData(const uint16_t fileNumber);
   void flashDumpLastFile();
   bool detectLaunch();
   bool detectBurnout();
   bool detectApogee();
   bool detectLanding();
-  bool checkDeploymentConditions(ParachuteType type);
+  bool checkDeploymentConditions(const ParachuteType type);
   void sendFlightSummary();
   void drogueParashuteOpen();
   void mainParashuteOpen();
   void updateFlightState();
   void initWatchdog();
   void watchdog();
-  void handleDebugMode();
+  void handleDebugMode();  /// do zmieniania w locie
   void handleFlightMode();
-  void handleDumpMode();
-  void handleSleepMode();
-
-
-
-
-
-
+  void handleDumpMode();  /// nie wiem co tu się dzieje obecnie
+  void handleSleepMode();  /// chyba będzie ok
+  void handleModes(const uint32_t now);
 
   
-  /*
+/*
   // === Metody prywatne ===
   void readModeFromSwitch();
   void printSystemMode();
@@ -445,7 +399,7 @@ private:
   void handleDumpMode();
   void handleSleepMode();
 
-  */
+*/
   
 public:
   Rakieta();

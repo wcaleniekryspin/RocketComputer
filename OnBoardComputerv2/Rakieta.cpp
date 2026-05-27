@@ -1,19 +1,66 @@
-#include <sys/_stdint.h>
 #include "Rakieta.h"
 
 
 /*
-ZASADY:
-  -nie może być setOffsets w setupie - jak się zresetuje w locie, to musi szybko przejść do loopa
+  1. Ograniczone użycie const   -    W wielu metodach, które nie modyfikują stanu obiektu, brakuje deklaracji const. Na przykład printData(), prepareDataLineMsg(), prepareOffsetsMsg(), sendFlightSummary() – wszystkie powinny być const, ponieważ tylko odczytują dane. Brak const utrudnia kompilatorowi optymalizacje i wprowadza w błąd programistę co do intencji funkcji. W systemie krytycznym każda metoda, która nie zmienia obiektu, powinna być jawnie oznaczona jako const.
+  4. Brak pełnego użycia constexpr   -    W config.h wszystkie stałe zdefiniowano za pomocą #define, a w Rakieta.cpp nie ma ani jednego constexpr. Makra preprocesora nie mają typu, nie podlegają sprawdzeniu składniowemu i nie są widoczne w debuggerze. Zamiast #define FREQUENCY 868 powinno być constexpr int FREQUENCY = 868. constexpr daje typowanie i możliwość sprawdzenia stałych w czasie kompilacji.
+*/
 
+/*
+  2. Użycie String   -    Kod intensywnie używa String do budowania komunikatów (np. prepareDataLineMsg(), prepareOffsetsMsg(), sendFlightSummary(), handleCommand()). Klasa String z Arduino dynamicznie alokuje pamięć na stercie, co jest zabronione w standardach MISRA/JSF. W locie może to prowadzić do fragmentacji, nieprzewidywalnych opóźnień lub wyczerpania pamięci. Wszystkie operacje na napisach powinny być zastąpione statycznymi buforami char[] i snprintf().
+  3. Magic numbers   -    W kodzie rozsiane są liczby bez nazwanych stałych: 1013.25 (w handleBmp i setOffsets), 4095.0f (w handleBattery), 50, 25, 10 (w setOffsets), 30000 (timeout), 0.5f (filtr), 1.0f (w detectApogee), 20 i 60000 (w handleFlightMode), 200, 100 itp. Utrudnia to strojenie i zrozumienie logiki. Każda taka liczba powinna być zdefiniowana jako constexpr z opisową nazwą.
+  5. Ograniczone użycie list inicjalizacyjnych   -    W konstruktorze Rakieta::Rakieta() lista inicjalizacyjna jest długa, ale niektóre pola (np. errorFlags) nie są na niej umieszczone, mimo że mają być inicjalizowane. Co prawda errorFlags ma inicjalizator w klasie (uint16_t errorFlags = 0), co jest dobre, ale w innych miejscach (np. operationDone jako zmienna globalna) brakuje inicjalizacji. W systemie krytycznym preferuje się inicjalizację na liście konstruktora zamiast późniejszego przypisania.
+  6. Zbyt szeroki scope funkcji/danych   -    Wiele funkcji pomocniczych jest zadeklarowanych jako prywatne metody klasy Rakieta, choć mogłyby być funkcjami wolnymi static lub w anonimowej przestrzeni nazw w pliku Rakieta.cpp. Przykłady: calcChecksum (choć nie istnieje), floatToString (brak), ale też flashRecoverAfterReset(), flashDumpFileList() – nie potrzebują dostępu do prywatnych pól? Część z nich faktycznie korzysta z pól, ale wiele mogłoby być static. Zwiększa to widoczność symboli i utrudnia analizę przepływu.
+  7. Niejawne konwersje typów   -    W kodzie występują niejawne konwersje, np. w handleBattery: rawValue (int) jest mnożone przez 4.2f – to konwersja na float, ale brak static_cast. W detectApogee porównanie float z float bez upewnienia się, że wartości nie są NaN. W setOffsets dodawanie do siebie wartości różnych typów (int, float). Standard JSF wymaga jawnych rzutowań (static_cast) dla wszystkich konwersji, aby uniknąć niezdefiniowanego zachowania i utraty precyzji.
+  8. Brak pełnej centralizacji maszyny stanów (FSM)   -    System ma dwa poziomy stanów: SystemMode (DEBUG, FLIGHT, DUMP, SLEEP) oraz FlightState (IDLE, BOOST, COAST, ...). Logika przejść jest rozproszona: w loop() jest switch dla trybów systemowych, w updateFlightState() switch dla stanów lotu, a dodatkowo osobne funkcje detectLaunch(), detectBurnout() itp. Brak jednej, spójnej maszyny stanów z jawnymi przejściami. W systemie krytycznym wszystkie stany i przejścia powinny być widoczne w jednym miejscu.
+  9. Funkcja loop() ma wiele odpowiedzialności   -    Rakieta::loop() nie jest bardzo długa, ale pośrednio przez wywołania handleDebugMode(), handleFlightMode() itp. zarządza całym systemem. handleFlightMode() natomiast wykonuje odczyt sensorów, aktualizację stanu lotu, przygotowanie pakietu, wysyłkę LoRa, zapis na flash – to zbyt wiele odpowiedzialności. Zgodnie z zasadą "jedna funkcja – jedna odpowiedzialność", każda z tych operacji powinna być wydzielona do osobnych funkcji.
+  10. Użycie delay()   -    W Rakieta.cpp wielokrotnie używane jest delay(): w setOffsets() delay(25) i delay(200), w initGPS() delay(500), w transmit() delay(1), w systemSleep() delay(time). delay() blokuje wykonanie całego programu na zadany czas, co w systemie czasu rzeczywistego jest niedopuszczalne – prowadzi do utraty danych z sensorów i braku reakcji na krytyczne zdarzenia. Należy zastąpić delay() nieblokującymi timerami opartymi na millis().
+  11. Ograniczone programowanie defensywne   -    Mimo że kod sprawdza, czy komunikacja z sensorami się powiodła (np. if(lsm.getEvent(...))), brakuje walidacji zakresów odczytanych wartości. Przykład: w handleBmp() ciśnienie może wynieść 0 hPa lub ujemną wysokość – nie jest to sprawdzane. W handleLsm() przyspieszenie może przekroczyć zakres ±16g z powodu błędu. System powinien traktować każdą wartość z sensora jako potencjalnie błędną i wykonywać sanity check (np. if (abs(ax) > 20.0f) ax = 0).
+  12. Brak pełnej architektury odzyskiwania po awarii (fault recovery)   -    Kod ustawia flagi błędów (errorFlags), ale nie definiuje jawnego bezpiecznego stanu ani trybu ograniczonej funkcjonalności. Na przykład, gdy GPS przestanie działać w locie, system kontynuuje lot według ostatnich danych, zamiast przejść w tryb awaryjny (np. nawigacja bezwładnościowa). Wymagane jest zdefiniowanie dla każdego błędu konkretnej reakcji: reset komponentu, przejście do trybu degraded, awaryjne lądowanie.
+  13. Brak architektury watchdog   -    W kodzie zdefiniowano funkcje initWatchdog() i watchdog(), ale nigdzie nie są one wywołane – brak inicjalizacji watchdog w init() i brak okresowego odświeżania w pętli głównej. Watchdog jest podstawowym mechanizmem wykrywania zawieszenia programu w systemach krytycznych. Bez niego, jeśli program wejdzie w nieskończoną pętlę lub zablokuje się na operacji I/O, system nigdy się nie zresetuje.
+  14. Ograniczone sprawdzanie zakresów danych   -    Dane z sensorów są używane w obliczeniach bez weryfikacji, czy są fizycznie możliwe. Na przykład w detectApogee() porównuje się data.bmp1.lastVerticalSpeed <= APOGEE_VELOCITY_THRESHOLD – ale jeśli lastVerticalSpeed jest NaN lub nieskończonością, wynik będzie nieprawidłowy. Należy przed każdym użyciem sprawdzać, czy wartość jest skończona i mieści się w oczekiwanym przedziale (np. isfinite()).
+  15. Brak jawnych timeoutów dla części operacji   -    Operacje odczytu z I2C, SPI czy GPS nie mają zdefiniowanych timeoutów. Na przykład gps.encode() czyta z bufora UART, ale jeśli dane przestaną napływać, program nie ma informacji o tym po czasie. W transmit() jest timeout dla LoRa, ale to wyjątek. Każda operacja, która może blokować, powinna mieć limit czasu, po którym zostaje przerwana, a komponent oznaczony jako uszkodzony.
+  16. Brak separacji warstw logicznych (HAL vs. logika lotu)   -    Klasa Rakieta bezpośrednio miesza wywołania bibliotek sensorów (Adafruit_LSM6DS, TinyGPS++, SX1262) z logiką decyzyjną lotu (detekcja startu, apogeum). Utrudnia to testowanie (nie można zasymulować sensorów) i zmiany sprzętu. Wzorzec Hardware Abstraction Layer (HAL) nakazuje oddzielenie sterowania od konfiguracji i odczytu sprzętu.
+  17. Ograniczona modularność   -    Cała funkcjonalność (sensory, komunikacja, logowanie na flash, logika lotu, obsługa trybów) jest skupiona w jednej klasie Rakieta. Powoduje to, że zmiana w jednym obszarze (np. sposób zapisu na flash) może wpłynąć na inne. Zgodnie z zasadą pojedynczej odpowiedzialności, system powinien być podzielony na niezależne moduły: SensorManager, FlightComputer, Logger, Radio, PowerManager.
+  18. Brak abstrakcji sensorów   -    Kod wywołuje bezpośrednio metody specyficzne dla bibliotek (np. lsm.getEvent(), bmp1.performReading(), gps.encode()). Aby wymienić czujnik na inny (np. BMP280 zamiast BMP388), trzeba zmodyfikować wiele funkcji. Abstrakcyjne interfejsy (np. klasa Barometer z metodami readPressure(), readAltitude()) pozwoliłyby na łatwą wymianę sprzętu bez wpływu na logikę lotu.
+  19. Brak jednolitego modelu obsługi błędów   -    Błędy są obsługiwane lokalnie poprzez ustawienie bitów w errorFlags, ale nie ma centralnego mechanizmu, który agreguje błędy, decyduje o priorytecie i podejmuje decyzje systemowe (np. przejście w tryb awaryjny). Różne funkcje wypisują komunikaty o błędach na Serial, ale nie ma spójnego logowania ani reakcji. Wymagany jest dedykowany menedżer błędów (ErrorHandler).
+  20. Ograniczona przewidywalność czasowa   -    Użycie delay(), String, Serial.print oraz blokujących operacji I2C/SPI powoduje, że czas wykonania funkcji jest nieokreślony. W systemie czasu rzeczywistego wymagana jest analiza najgorszego czasu wykonania (WCET) i dowiedzenie, że wszystkie terminy są dotrzymane. Obecny kod nie daje żadnych gwarancji – np. handleBmp() może wykonać się szybko lub wolno w zależności od stanu czujnika.
+  21. Możliwe użycie funkcji niedeterministycznych   -    millis() jest zwykle deterministyczne, ale String alokuje pamięć, co może powodować nieprzewidywalne opóźnienia. Ponadto biblioteki Adafruit mogą wewnętrznie używać delay() lub pętli oczekujących, które nie mają gwarantowanego czasu. Standard JSF wymaga eliminacji wszystkich niedeterministycznych konstrukcji, a jeśli to niemożliwe – ścisłej kontroli.
+  22. Brak pełnej izolacji konfiguracji   -    Mimo że istnieje config.h, niektóre parametry są wciąż rozproszone: 1013.25 (ciśnienie referencyjne), 4095.0f (zakres ADC), 9600 (baudrate GPS), 0x76 (adres I2C – brak go w config.h?). W Rakieta.cpp pojawiają się też liczby jak 0.5f dla filtru, 1.0f dla detekcji apogeum. Wszystkie parametry powinny być zebrane w jednym miejscu (config.h lub struktura konfiguracyjna).
+  23. Ograniczone użycie semantic typing (silne typowanie)   -    Stany lotu (IDLE, BOOST, ...) są zdefiniowane jako zwykły enum, a nie enum class. Przez to mogą być niejawnie konwertowane na int, co może prowadzić do błędów (np. przypisanie wartości spoza zakresu). enum class zapewnia bezpieczeństwo typów. Podobnie wartości fizyczne (ciśnienie, wysokość) powinny być opakowane w klasy (np. Pressure, Altitude) z jawnymi konwersjami.
+  24. Brak pełnej kontroli overflow/underflow   -    W obliczeniach całkujących (np. data.lsm.lastTotalSpeed += data.lsm.lastTotalAccel * dt) nie ma zabezpieczeń przed przekroczeniem zakresu float ani przed wartościami NaN. W systemie krytycznym po każdej operacji arytmetycznej należy sprawdzić, czy wynik jest skończony i mieści się w oczekiwanym przedziale, a w razie potrzeby nasycić wartość lub przejść w stan awaryjny.
+  25. Ograniczone użycie compile-time validation   -    Brak static_assert dla parametrów konfiguracyjnych. Na przykład SF (spreading factor) powinien być w zakresie 6–12, ale nie jest to sprawdzone w czasie kompilacji. static_assert(SF >= 6 && SF <= 12, "SF out of range") wykryłoby błąd natychmiast, zamiast czekać na nieprawidłowe działanie LoRa w locie.
+  26. Brak pełnej analizy stanów awaryjnych (FMEA)   -    Kod nie definiuje zachowania dla wielu potencjalnych awarii: co się dzieje, gdy BMP1 działa, ale BMP2 nie? Gdy GPS wysyła błędne dane (np. nagła zmiana pozycji o kilometr)? Gdy LoRa nie może nadać pakietu przez dłuższy czas? Brakuje analizy trybów uszkodzeń i efektów (FMEA) oraz zdefiniowanych reakcji dla każdego scenariusza.
+  27. Brak formalnego odzyskiwania stanu (state recovery)   -    Po wykryciu błędu (np. errorFlags |= LSM_ERROR) system nie podejmuje próby przywrócenia sprawności – nie resetuje czujnika, nie ponawia inicjalizacji, nie przełącza na redundantny sensor. W lotnictwie wymaga się, aby system miał zdolność do powrotu do znanego bezpiecznego stanu po błędzie przejściowym (np. restart magistrali I2C).
+  28. Ograniczone logowanie diagnostyczne   -    W trybie FLIGHT logowane są tylko dane telemetryczne (flashWriteString), ale nie loguje się błędów, zmian stanów, timeoutów ani innych zdarzeń systemowych. W przypadku katastrofy brak logów uniemożliwi analizę przyczyny. System powinien zapisywać pełną diagnostykę (z timestampem) do pamięci nieulotnej, a w trybie DEBUG wysyłać przez Serial.
+  29. Zbyt duża złożoność cyklomatyczna (cyclomatic complexity)   -    Funkcje takie jak updateFlightState() mają zagnieżdżone switch i if, co prowadzi do złożoności > 15. handleFlightMode() również zawiera wiele ścieżek. Wysoka złożoność utrudnia testowanie wszystkich możliwych przejść i zwiększa ryzyko niewykrytych błędów. Należy podzielić te funkcje na mniejsze, proste jednostki.
+  30. Brak formalnej separacji faz systemu   -    Fazy: startup, kalibracja, standby, lot, odzyskiwanie, awaria – nie są odseparowane architektonicznie. W kodzie warunki typu if (currentMode == FLIGHT) są rozsiane, a przejścia między fazami są ukryte w różnych funkcjach. Wzorzec "State Machine" z oddzielnymi klasami dla każdego stanu (np. class FlightState, class DebugState) ułatwia dodawanie nowych faz i zapewnia, że logika każdej fazy jest zamknięta w jednym miejscu.
+*/
 
-DONE:
-  -dodać wartości inicjalizacyjne do zmiennych
-  -dodać odejmowanie offsetów przy handle
-
-
+/*
 TO DO:
   -sprawdzić  "AIR VEHICLE C++ CODING STANDARDS FOR THE SYSTEM DEVELOPMENT AND DEMONSTRATION PROGRAM"
+    1. Dodać const   -   Oznaczać wszystkie dane i metody, które nie zmieniają stanu. To poprawia bezpieczeństwo i czytelność kodu.
+    2. Usunąć String   -   Przejść na char[] oraz snprintf. Pozwoli to uniknąć problemów z heap fragmentation.
+    3. Wprowadzić constexpr   -   Wszystkie stałe systemowe przenieść do constexpr. Kod będzie bardziej typowany i łatwiejszy do utrzymania.
+    4. Korzystać z initializer list   -   Pola klas inicjalizować bezpośrednio przy tworzeniu obiektu. To standard nowoczesnego C++.
+    5. Ograniczyć widoczność symboli   -   Funkcje lokalne oznaczać jako static lub umieszczać w anonymous namespace. Minimalizuje to coupling.
+    6. Używać static_cast   -   Każdą konwersję typów wykonywać jawnie. Ułatwia to analizę i wykrywanie błędów.
+    7. Rozbudować FSM   -   Całą logikę lotu umieścić w jednej centralnej state machine. Wszystkie przejścia powinny być jawne.
+    8. Rozbić loop()   -   Podzielić główną logikę na mniejsze moduły funkcjonalne. Zwiększy to czytelność i testowalność.
+    9. Zastąpić delay()   -   Przejść na millis() lub scheduler nieblokujący. System stanie się bardziej deterministyczny.
+    10. Dodać sanity-checki   -   Walidować zakresy danych sensorów i timeouty komunikacji. To zwiększy odporność systemu.
+    11. Dodać watchdog   -   Wprowadzić mechanizm wykrywania zawieszenia programu. To poprawi niezawodność systemu.
+    12. Wprowadzić fault manager   -   Stworzyć centralny system zarządzania błędami. Wszystkie moduły powinny raportować błędy w jednolity sposób.
+    13. Rozdzielić warstwy systemu   -   Oddzielić logikę lotu od bezpośredniej obsługi hardware. Ułatwi to rozwój i testowanie.
+    14. Dodać recovery modes   -   Zdefiniować zachowanie systemu po awarii sensora lub komunikacji. System powinien mieć jawne fail-safe behavior.
+    15. Ujednolicić konfigurację   -   Wszystkie parametry systemu trzymać w jednym module konfiguracyjnym. Ułatwi to strojenie rakiety.
+    16. Dodać więcej enum class   -   Stany i tryby pracy reprezentować przez silnie typowane enumy. Zmniejszy to ryzyko błędów logicznych.
+    17. Dodać timeout handling   -   Każda komunikacja z hardware powinna mieć limit czasu. Zapobiega to blokowaniu systemu.
+    18. Rozszerzyć diagnostykę   -   Logować więcej informacji o błędach i stanach systemu. Ułatwi to debugowanie lotów.
+    19. Ograniczyć złożoność funkcji   -   Długie funkcje dzielić na mniejsze kroki logiczne. Poprawia to maintainability.
+    20. Dodać compile-time checks   -   Używać static_assert dla krytycznych parametrów konfiguracyjnych. Pozwala to wykrywać błędy podczas kompilacji.
+  
   -zrobić graficzne przedstawienie blokowe jak ma działać cały system
 
 
@@ -22,6 +69,7 @@ TO DO:
   -dodać flush po FLUSH_AFTER_WRITES zapisach
   -w funkcjach filter dodać pozostałe czujniki ze sprawdzaniem errorów
   -zrobić funkcję handleErrors()
+  -checkRadio() zapisuje dostarczoną komendę na flash
 
   Dokumentacja i komentarze:
       Dodaj szczegółowe komentarze do kodu, zwłaszcza w sekcjach związanych z obsługą błędów i watchdogiem.
@@ -47,19 +95,87 @@ TO DO:
 
 // === Konstruktor ===
 Rakieta::Rakieta():
+  // === Zmienne stanu ===
+  currentMode(DEBUG),
+  currentFlightState(IDLE),
+
+  // === Offsets ===
+  offsets{},
+
+  // === Data ===
+  data{},
+  
+  // === Operacyjne ===
+  offsetsSet(false),
+  drogueDeployed(false),
+  mainDeployed(false),
   errorFlags(LORA_ERROR | LSM_ERROR | BMP1_ERROR | BMP2_ERROR | ADXL_ERROR | GPS_ERROR | FLASH_ERROR),
+
+  // === Urządzenia On/Off ===
+  led1IsOn(false),
+  led1OffTime(0),
+  led2IsOn(false),
+  led2OffTime(0),
+  buzzerIsOn(false),
+  buzzerOffTime(0),
+  solenoid1IsOn(false),
+  solenoid1OffTime(0),
+  solenoid2IsOn(false),
+  solenoid2OffTime(0),
+  
+  // === Dane przefiltrowane ===
+  filteredAccelX(0.0f),
+  filteredAccelY(0.0f),
+  filteredAccelZ(0.0f),
+  filteredGyroX(0.0f),
+  filteredGyroY(0.0f),
+  filteredGyroZ(0.0f),
+  fusedAltitude(0.0f),
+  prevFusedAltitude(0.0f),
+  
+  // === Czasy dla detekcji ===
+  inFlight(false),
+  launchDetectTime(0),
+  burnoutDetectTime(0),
+  apogeeDetectTime(0),
+  descentDetectTime(0),
+  landedDetectTime(0),
+
+  // === Obiekty SPI ===
   spiFast(SPI4_SCK, SPI4_MISO, SPI4_MOSI),
   spiFlash(SPI1_SCK, SPI1_MISO, SPI1_MOSI),
   spiLora(SPI_LORA_SCK, SPI_LORA_MISO, SPI_LORA_MOSI),
+
+  // === Czujniki i peryferia ===
   lsm(),
   bmp1(),
   bmp2(),
   adxl(CS_ADXL, &spiFast),
-  flashTransport(CS_FLASH, &spiFlash),
-  flash(&flashTransport),
+  gps(),
+  gpsSerial(RX_MAX, TX_MAX),
+
+  // === LoRa ===
+  packet(0),
+  loraMsgStartTime(0),
   loraSettings(2000000, MSBFIRST, SPI_MODE0),
   lora(new Module(CS_LORA, DIO1_LORA, RST_LORA, BUSY_LORA, spiLora)),
-  gpsSerial(RX_MAX, TX_MAX)
+  
+  // === Flash ===
+  flashWriteCount(0),
+  dumpAddress(0),
+  flashDataFile(),
+  dumpFile(),
+  flashTransport(CS_FLASH, &spiFlash),
+  flash(&flashTransport),
+  fatfs(),
+  
+  // === Zarządzanie czasem ===
+  lastWatchdogTime(0),
+  lastFlightLoop(0),
+  lastDebugPrint(0),
+  lastDumpProgress(0),
+  lastSleepCheck(0),
+  lastFlightModeLoop(0)
 {
 }
 
@@ -174,8 +290,8 @@ bool Rakieta::initBMP()
 
 bool Rakieta::initGPS()
 {
-  gpsSerial.begin(9600, SERIAL_8N1);
-  Serial.println("[GPS] UART2 OK (9600 baud)");
+  gpsSerial.begin(GPS_BAUNDRATE, SERIAL_8N1);
+  Serial.println("[GPS] UART2 OK");
   
   delay(500);
   while (gpsSerial.available())
@@ -194,7 +310,7 @@ bool Rakieta::initGPS()
   return false;
 }
 
-void Rakieta::updateLeds(uint32_t now)
+void Rakieta::updateLeds(const uint32_t now)
 {
   if (led1IsOn && led1OffTime < now)
   {
@@ -208,7 +324,7 @@ void Rakieta::updateLeds(uint32_t now)
   }
 }
 
-void Rakieta::updateBuzzer(uint32_t now)
+void Rakieta::updateBuzzer(const uint32_t now)
 {
   if (buzzerIsOn && buzzerOffTime < now)
   {
@@ -217,7 +333,7 @@ void Rakieta::updateBuzzer(uint32_t now)
   }
 }
 
-void Rakieta::updateSolenoid(uint32_t now)
+void Rakieta::updateSolenoid(const uint32_t now)
 {
   if (solenoid1IsOn && solenoid1OffTime < now)
   {
@@ -240,7 +356,7 @@ void Rakieta::systemReset()
   NVIC_SystemReset();
 }
 
-void Rakieta::systemSleep(uint32_t time)
+void Rakieta::systemSleep(const uint32_t time)
 {
   delay(time);
   // HAL_SuspendTick();
@@ -297,7 +413,7 @@ void Rakieta::printFlightMode()  /// prawdopodobnie do usunięcia bo nigdzie nie
 void Rakieta::handleBattery()  // tzreba sprawdzić czy odpowiednie są przeliczniki
 {
   int rawValue = analogRead(BATTERY);
-  data.battery.voltage = (rawValue * 4.2f / 4095.0f);
+  data.battery.voltage = (rawValue * BATTERY_FULL_VOLTAGE / BATTERY_MAX_READ);
 }
 
 void Rakieta::handleLsm()
@@ -357,7 +473,7 @@ void Rakieta::handleBmp()
   if (bmp1.performReading())
   {
     data.bmp1.pressure = bmp1.pressure;
-    data.bmp1.altitude = bmp1.readAltitude(1013.25) - offsets.bmp1.alti;
+    data.bmp1.altitude = bmp1.readAltitude(SEA_LEVEL_PRESSURE_HPA) - offsets.bmp1.alti;
     data.bmp1.temp = bmp1.temperature;
     
     if (data.bmp1.maxAltitude < data.bmp1.altitude)
@@ -380,7 +496,7 @@ void Rakieta::handleBmp()
   if (bmp2.performReading())
   {
     data.bmp2.pressure = bmp2.pressure;
-    data.bmp2.altitude = bmp2.readAltitude(1013.25) - offsets.bmp2.alti;
+    data.bmp2.altitude = bmp2.readAltitude(SEA_LEVEL_PRESSURE_HPA) - offsets.bmp2.alti;
     data.bmp2.temp = bmp2.temperature;
     
     if (data.bmp2.maxAltitude < data.bmp2.altitude)
@@ -472,7 +588,7 @@ void Rakieta::setOffsets()
 {
   Serial.println("\n=== Wyznaczanie offsetów ===\n");
 
-  uint8_t num = 50;
+  uint8_t num = OFFSETS_SENSORS_READ;
   for (uint8_t i = 0; i < num; i++)
   {
     sensors_event_t accel, gyro, temp;
@@ -498,13 +614,13 @@ void Rakieta::setOffsets()
 
     if (bmp1.performReading())
     {
-      offsets.bmp1.altitude += bmp1.readAltitude(1013.25);
+      offsets.bmp1.alti += bmp1.readAltitude(SEA_LEVEL_PRESSURE_HPA);
       offsets.bmp1.valid++;
     }
 
     if (bmp2.performReading())
     {
-      offsets.bmp2.altitude += bmp2.readAltitude(1013.25);
+      offsets.bmp2.alti += bmp2.readAltitude(SEA_LEVEL_PRESSURE_HPA);
       offsets.bmp2.valid++;
     }
 
@@ -520,10 +636,10 @@ void Rakieta::setOffsets()
   offsets.adxl.ax = (offsets.adxl.valid ? ((float)offsets.adxl.ax / (float)offsets.adxl.valid) : 0);
   offsets.adxl.ay = (offsets.adxl.valid ? ((float)offsets.adxl.ay / (float)offsets.adxl.valid) : 0);
   offsets.adxl.az = (offsets.adxl.valid ? ((float)offsets.adxl.az / (float)offsets.adxl.valid) : 0);
-  offsets.bmp1.altitude = (offsets.bmp1.valid ? ((float)offsets.bmp1.altitude / (float)offsets.bmp1.valid) : 0);
-  offsets.bmp2.altitude = (offsets.bmp2.valid ? ((float)offsets.bmp2.altitude / (float)offsets.bmp2.valid) : 0);
+  offsets.bmp1.alti = (offsets.bmp1.valid ? ((float)offsets.bmp1.alti / (float)offsets.bmp1.valid) : 0);
+  offsets.bmp2.alti = (offsets.bmp2.valid ? ((float)offsets.bmp2.alti / (float)offsets.bmp2.valid) : 0);
 
-  num = 10;
+  num = OFFSETS_GPS_READ;
   uint32_t timeout = millis() + 30000;
 
   while (offsets.gps.valid < num || millis() < timeout)
@@ -545,151 +661,129 @@ void Rakieta::setOffsets()
   offsetsSet = true;
 }
 
-String Rakieta::prepareOffsetsMsg()
+void Rakieta::prepareOffsetsMsg(char* buffer, size_t bufferSize)
 {
-  if (!offsetsSet) return "Offsets not set";
-  
-  String msg = "Valid num:Lsm:";
-  msg += String(offsets.lsm.valid);
-  msg += ",Adxl:";
-  msg += String(offsets.adxl.valid);
-  msg += ",Bmp1:";
-  msg += String(offsets.bmp1.valid);
-  msg += ",Bmp2:";
-  msg += String(offsets.bmp2.valid);
-  msg += ",GPS:";
-  msg += String(offsets.gps.valid);
-  msg += "Offsets:Lsm:{ax:";
-  msg += String(offsets.lsm.ax);
-  msg += ",ay:";
-  msg += String(offsets.lsm.ay);
-  msg += ",az:";
-  msg += String(offsets.lsm.az);
-  msg += ",gx:";
-  msg += String(offsets.lsm.gx);
-  msg += ",gy:";
-  msg += String(offsets.lsm.gy);
-  msg += ",gz:";
-  msg += String(offsets.lsm.gz);
-  msg += "}Adxl:{ax:";
-  msg += String(offsets.adxl.ax);
-  msg += ",ay:";
-  msg += String(offsets.adxl.ay);
-  msg += ",az:";
-  msg += String(offsets.adxl.az);
-  msg += "}GPS:{lat:";
-  msg += String(offsets.gps.lat);
-  msg += ",lng:";
-  msg += String(offsets.gps.lng);
-  msg += ",altiM:";
-  msg += String(offsets.gps.alti);
-  msg += "}";
-  return msg;
+  if (!offsetsSet) return;
+  if (buffer == nullptr || bufferSize <= 0) return;
+
+  memset(buffer, 0, bufferSize);
+
+  int written = snprintf(buffer, bufferSize,
+    "ValidNum:Lsm:%d,Adxl%d,Bmp1%d,Bmp2%d,GPS%d,"
+    "Offsets:Lsm:{ax:%f,ay:%f,az:%f,gx:%f,gy:%f,gz:%f}"
+    "Adxl:{ax:%f,ay:%f,az:%f}"
+    "GPS:{lat:%f,lng:%f,altiM:%f}",
+    offsets.lsm.valid,
+    offsets.adxl.valid,
+    offsets.bmp1.valid,
+    offsets.bmp2.valid,
+    offsets.gps.valid,
+    offsets.lsm.ax,
+    offsets.lsm.ay,
+    offsets.lsm.az,
+    offsets.lsm.gx,
+    offsets.lsm.gy,
+    offsets.lsm.gz,
+    offsets.adxl.ax,
+    offsets.adxl.ay,
+    offsets.adxl.az,
+    offsets.gps.lat,
+    offsets.gps.lng,
+    offsets.gps.alti
+  );
+
+  if (written < 0 || static_cast<size_t>(written) >= bufferSize)
+  {
+    errorFlags |= MSG_TOO_LONG_ERROR;
+    
+    snprintf(buffer, bufferSize, "ERROR:MSG_TOO_LONG,%lu", millis());
+  }
 }
 
-String Rakieta::prepareDataLineMsg()
+void Rakieta::prepareDataLineMsg(char* buffer, size_t bufferSize)
 {
-  String msg = "RocketData:";
+  if (buffer == nullptr || bufferSize <= 0) return;
 
-  // Timestamp
-  msg += String(millis());
-  msg += ",";
-  msg += String(packet);
-  msg += ",";
-  msg += String(static_cast<int>(currentFlightState));
-  msg += ",";
-  msg += String(errorFlags, HEX);
-  msg += ",";
-  
-  // GPS
-  msg += String(data.gps.lat, 6);
-  msg += ",";
-  msg += String(data.gps.lng, 6);
-  msg += ",";
-  msg += String(data.gps.alti, 2);
-  msg += ",";
-  msg += String(data.gps.h);
-  msg += ",";
-  msg += String(data.gps.m);
-  msg += ",";
-  msg += String(data.gps.s);
-  msg += ",";
-  msg += String(data.gps.centi);
-  msg += ",";
-  msg += String(data.gps.speed, 2);
-  msg += ",";
-  msg += String(data.gps.course, 0);
-  msg += ",";
-  msg += String(data.gps.satNum);
-  msg += ",";
-  msg += String(data.gps.hdop);
-  msg += ",";
-  
-  // LSM6
-  msg += String(data.lsm.ax, 4);
-  msg += ",";
-  msg += String(data.lsm.ay, 4);
-  msg += ",";
-  msg += String(data.lsm.az, 4);
-  msg += ",";
-  msg += String(data.lsm.gx, 3);
-  msg += ",";
-  msg += String(data.lsm.gy, 3);
-  msg += ",";
-  msg += String(data.lsm.gz, 3);
-  msg += ",";
-  msg += String(data.lsm.temp, 2);
-  msg += ",";
-  msg += String(data.lsm.lastTotalSpeed, 4);
-  msg += ",";
+  memset(buffer, 0, bufferSize);
 
-  // ADXL
-  msg += String(data.adxl.ax, 4);
-  msg += ",";
-  msg += String(data.adxl.ay, 4);
-  msg += ",";
-  msg += String(data.adxl.az, 4);
-  msg += ",";
-  msg += String(data.adxl.lastTotalSpeed, 4);
-  msg += ",";
-  
-  // BMP
-  msg += String(data.bmp1.temp, 2);
-  msg += ",";
-  msg += String(data.bmp1.pressure, 2);  /// sprawdzić czy jest w Pa czy w hPa
-  msg += ",";
-  msg += String(data.bmp1.altitude, 2);
-  msg += ",";
-  msg += String(data.bmp1.lastVerticalSpeed, 4);
-  msg += ",";
-  msg += String(data.bmp2.temp, 2);
-  msg += ",";
-  msg += String(data.bmp2.pressure, 2);  /// sprawdzić czy jest w Pa czy w hPa
-  msg += ",";
-  msg += String(data.bmp2.altitude, 2);
-  msg += ",";
-  msg += String(data.bmp2.lastVerticalSpeed, 4);
-  msg += ",";
+  int written = snprintf(buffer, bufferSize,
+    "RocketData:%lu,%u,%d,%04X,"
+    "%.6f,%.6f,%.2f,%02u,%02u,%02u,%02u,%.2f,%.0f,%u,%u,"
+    "%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.2f,%.4f,"
+    "%.4f,%.4f,%.4f,%.4f,"
+    "%.2f,%.2f,%.2f,%.4f,"
+    "%.2f,%.2f,%.2f,%.4f,"
+    "%.1f",
 
-  // BATTERY
-  msg += String(data.battery.voltage, 1);
-  return msg;
+    // Timestamp i podstawowe
+    millis(),
+    packet,
+    static_cast<int>(currentFlightState),
+    errorFlags,
+
+    // GPS
+    data.gps.lat,
+    data.gps.lng,
+    data.gps.alti,
+    data.gps.h,
+    data.gps.m,
+    data.gps.s,
+    data.gps.centi,
+    data.gps.speed,
+    data.gps.course,
+    data.gps.satNum,
+    data.gps.hdop,
+    
+    // LSM6
+    data.lsm.ax,
+    data.lsm.ay,
+    data.lsm.az,
+    data.lsm.gx,
+    data.lsm.gy,
+    data.lsm.gz,
+    data.lsm.temp,
+    data.lsm.lastTotalSpeed,
+
+    // ADXL
+    data.adxl.ax,
+    data.adxl.ay,
+    data.adxl.az,
+    data.adxl.lastTotalSpeed,
+    
+    // BMP
+    data.bmp1.temp,
+    data.bmp1.pressure,  /// sprawdzić czy jest w Pa czy w hPa
+    data.bmp1.altitude,
+    data.bmp1.lastVerticalSpeed,
+    data.bmp2.temp,
+    data.bmp2.pressure,  /// sprawdzić czy jest w Pa czy w hPa
+    data.bmp2.altitude,
+    data.bmp2.lastVerticalSpeed,
+
+    // BATTERY
+    data.battery.voltage
+  );
+
+  if (written < 0 || static_cast<size_t>(written) >= bufferSize)
+  {
+    errorFlags |= MSG_TOO_LONG_ERROR;
+    
+    snprintf(buffer, bufferSize, "ERROR:MSG_TOO_LONG,%lu", millis());
+  }
 }
 
 void Rakieta::filterAcceleration()  /// nigdzie nie używane
 {
-  const float alpha = 0.5f;
-  filteredAccelX = alpha * data.lsm.ax + (1 - alpha) * filteredAccelX;
-  filteredAccelY = alpha * data.lsm.ay + (1 - alpha) * filteredAccelY;
-  filteredAccelZ = alpha * data.lsm.az + (1 - alpha) * filteredAccelZ;
+  filteredAccelX = FUSION_ALPHA * data.lsm.ax + (1 - FUSION_ALPHA) * filteredAccelX;
+  filteredAccelY = FUSION_ALPHA * data.lsm.ay + (1 - FUSION_ALPHA) * filteredAccelY;
+  filteredAccelZ = FUSION_ALPHA * data.lsm.az + (1 - FUSION_ALPHA) * filteredAccelZ;
 }
 
 void Rakieta::filterGyro()  /// nigdzie nie używane
 {
-  const float alpha = 0.5f;
-  filteredGyroX = alpha * data.lsm.gx + (1 - alpha) * filteredGyroX;
-  filteredGyroY = alpha * data.lsm.gy + (1 - alpha) * filteredGyroY;
-  filteredGyroZ = alpha * data.lsm.gz + (1 - alpha) * filteredGyroZ;
+  filteredGyroX = FUSION_ALPHA * data.lsm.gx + (1 - FUSION_ALPHA) * filteredGyroX;
+  filteredGyroY = FUSION_ALPHA * data.lsm.gy + (1 - FUSION_ALPHA) * filteredGyroY;
+  filteredGyroZ = FUSION_ALPHA * data.lsm.gz + (1 - FUSION_ALPHA) * filteredGyroZ;
 }
 
 void Rakieta::calculateOrientation()  /// nigdzie nie używane
@@ -700,14 +794,13 @@ void Rakieta::calculateOrientation()  /// nigdzie nie używane
 
 void Rakieta::fuseBMPAndIMU()  /// nigdzie nie używane
 {
-  const float alpha = 0.5f;
   uint32_t now = millis();
   float dt = (now - data.lsm.lastTime) / 1000.0f;
   if (dt > 0.001)
   {
     float altitudeFromIMU = prevFusedAltitude + data.lsm.lastTotalAlti;
     
-    fusedAltitude = alpha * data.bmp1.altitude + (1 - alpha) * altitudeFromIMU;
+    fusedAltitude = FUSION_ALPHA * data.bmp1.altitude + (1 - FUSION_ALPHA) * altitudeFromIMU;
     prevFusedAltitude = fusedAltitude;
   }
 }
@@ -731,20 +824,27 @@ bool Rakieta::initLora()
   return false;
 }
 
-String Rakieta::prepareLoraStatusMsg()
+void Rakieta::prepareLoraStatusMsg(char* buffer, size_t bufferSize)
 {
-  String msg = "=== RADIO STATUS ===\nFrequency: ";
-  msg += String(FREQUENCY);
-  msg += " MHz,Moc: ";
-  msg += String(POWER);
-  msg += " dBm,SF: ";
-  msg += String(SF);
-  msg += "BW: ";
-  msg += String(BANDWIDTH);
-  msg += " kHz,CR: 4/";
-  msg += String(CODING_RATE);
-  msg += "\n";
-  return msg;
+  if (buffer == nullptr || bufferSize <= 0) return;
+
+  memset(buffer, 0, bufferSize);
+
+  int written = snprintf(buffer, bufferSize,
+    "=== RADIO STATUS ===\nFrequency:%luMHz,Moc:%ludBm,SF:luBW:lukHz,CR:4/%lu ";
+    FREQUENCY,
+    POWER,
+    SF,
+    BANDWIDTH,
+    CODING_RATE
+  );
+
+  if (written < 0 || static_cast<size_t>(written) >= bufferSize)
+  {
+    errorFlags |= MSG_TOO_LONG_ERROR;
+    
+    snprintf(buffer, bufferSize, "ERROR:MSG_TOO_LONG,%lu", millis());
+  }
 }
 
 void Rakieta::preparePacket()
@@ -815,17 +915,16 @@ void Rakieta::sendPacket()
   transmit(txPacket, ARRAY_SIZE);
 
   led1IsOn = true;
-  led1OffTime = millis() + 250;
+  led1OffTime = millis() + 100;
   digitalWrite(LED_1, HIGH);
 
   Serial.println("Sending DONE");
 }
 
-void Rakieta::transmit(String msg)
+void Rakieta::transmit(const uint8_t* msg, const size_t len)
 {
-  if (msg.length() > 255)
+  if (msg == nullptr || len == 0 || len > 255)
   {
-    Serial.println(F("Error: Message too long"));
     return;
   }
 
@@ -850,55 +949,28 @@ void Rakieta::transmit(String msg)
 
   operationDone = false;
   loraMsgStartTime = millis();
-  int state = lora.startTransmit(msg);
+  int state = lora.startTransmit(reinterpret_cast<const uint8_t*>(msg), len);
 
   if (state != RADIOLIB_ERR_NONE)
   {
     Serial.print(F("Transmit error: "));
     Serial.println(state);
+    errorFlags |= LORA_ERROR;
     operationDone = true;
     startListening();
   }
 }
 
-void Rakieta::transmit(uint8_t *msg, size_t len)
+void Rakieta::transmit(const uint8_t *msg)
 {
-  if (len > 255)
-  {
-    Serial.println(F("Error: Message too long"));
-    return;
-  }
+  if (msg == nullptr) return;
+  transmit(reinterpret_cast<const uint8_t*>(msg), strlen(msg));
+}
 
-  if (!operationDone)
-  {
-    if (millis() - loraMsgStartTime >= TX_TIMEOUT)
-    {
-      Serial.println("ERROR: LoRa timeout, forcing radio reset");
-      lora.standby();
-      delay(1);
-      startListening();
-    }
-    else
-    {
-      Serial.println("LoRa busy");
-      return;
-    }
-  }
-  
-  Serial.print(F("Sending: "));
-  Serial.println(*msg);
-
-  operationDone = false;
-  loraMsgStartTime = millis();
-  int state = lora.startTransmit(msg, len);
-
-  if (state != RADIOLIB_ERR_NONE)
-  {
-    Serial.print(F("Transmit error: "));
-    Serial.println(state);
-    operationDone = true;
-    startListening();
-  }
+void Rakieta::transmit(const char* msg, size_t len)
+{
+  if (msg == nullptr) return;
+  transmit(reinterpret_cast<const uint8_t*>(msg), len);
 }
 
 void Rakieta::startListening()
@@ -911,23 +983,42 @@ void Rakieta::startListening()
   }
 }
 
-void Rakieta::handleCommand(String command)  /// trzeba pododawać komendy
+/// trzeba pododawać komendy
+void Rakieta::handleCommand(const char* command)
 {
-  if (command == "RESET") { systemReset(); }
-  else if (command == "SET_OFFSETS") { setOffsets(); }
-  else if (command == "GET_OFFSETS") { transmit(prepareOffsetsMsg()); }  /// możliwe, że będzie za duże i trzeba będzie skompresować
-  else if (command == "GET_GPS_OFFSET") { sendGpsOffset(); }
-  else if (command == "GET_DATA") { transmit(prepareDataLineMsg()); }  /// możliwe, że będzie za duże i trzeba będzie skompresować
-  else if (command == "GET_RAW_DATA") { readSensorsData(); sendPacket(); }
+  if (command == nullptr) return;
+  
+  // Użycie strcmp do porównywania napisów
+  if (strcmp(command, "RESET") == 0) { systemReset(); }
+  else if (strcmp(command, "SET_OFFSETS") == 0) { setOffsets(); }
+  else if (strcmp(command, "GET_GPS_OFFSET") == 0) { sendGpsOffset(); }
+  else if (strcmp(command, "GET_RAW_DATA") == 0) { readSensorsData(); sendPacket(); }
+  else if (strcmp(command, "GET_OFFSETS") == 0)
+  {
+    char buffer[256];
+    prepareOffsetsMsg(buffer, sizeof(buffer));
+    transmit(buffer);
+  }
+  else if (strcmp(command, "GET_DATA") == 0)
+  {
+    char buffer[512];
+    prepareDataLineMsg(buffer, sizeof(buffer));
+    transmit(buffer);
+  }
+  else { transmit("ERROR:UNKNOWN_COMMAND"); }
 }
 
 void Rakieta::checkRadio()
 {
-  String msg;
-  int state = lora.readData(msg);
+    uint8_t buffer[256];
+  size_t len = 0;
+
+  int state = lora.readData(buffer, sizeof(buffer) - 1, len);
 
   if (state == RADIOLIB_ERR_NONE)
   {
+    buffer[len] = '\0';
+/*
     Serial.println(F("== MESSAGE RECEIVED =="));
     Serial.print(F("Message: "));
     Serial.println(msg);
@@ -937,9 +1028,13 @@ void Rakieta::checkRadio()
     Serial.print(F("SNR: "));
     Serial.print(lora.getSNR());
     Serial.println(F(" dB"));
-
-    handleCommand(msg);
+*/
+    handleCommand(reinterpret_cast<char*>(buffer), len);
     errorFlags &= ~LORA_ERROR;
+  }
+  else if (state != RADIOLIB_ERR_RX_TIMEOUT)
+  {
+    errorFlags |= LORA_ERROR;
   }
   else
   {
@@ -951,22 +1046,27 @@ void Rakieta::checkRadio()
 
 void Rakieta::sendGpsOffset()
 {
-  if (offsetsSet)
+  if (!offsetsSet) return;
+  if (buffer == nullptr || bufferSize <= 0) return;
+
+  memset(buffer, 0, bufferSize);
+
+  int written = snprintf(buffer, bufferSize,
+    "GSP offset:Now:%lu,lat:%f,lng:%f,alti:%f",
+    millis(),
+    offsets.gps.lat,
+    offsets.gps.lng,
+    offsets.gps.alti
+  );
+  
+  if (written < 0 || static_cast<size_t>(written) >= bufferSize)
   {
-    String msg = "GSP offset:Now:";
-
-    msg += String(millis());
-    msg += ",lat:";
-    msg += offsets.gps.lat;
-    msg += ",lng:";
-    msg += offsets.gps.lng;
-    msg += ",alti:";
-    msg += offsets.gps.alti;
-
-    transmit(msg);
+    errorFlags |= MSG_TOO_LONG_ERROR;
+    
+    snprintf(buffer, bufferSize, "ERROR:MSG_TOO_LONG,%lu", millis());
   }
-  else
-    transmit("Offsets not set");
+  
+  transmit(buffer);
 }
 
 bool Rakieta::initFlash()
@@ -984,35 +1084,31 @@ bool Rakieta::initFlash()
   return false;
 }
 
-bool Rakieta::flashFindNextFileNumber()
+bool Rakieta::flashFindNextFileNumber(char* fileName, size_t bufferSize)
 {
-  uint16_t fileNumber = 0;
-  char fileName[15];
-
-  while (fileNumber < 9999) // Max 9999 files
+  if (fileName == nullptr || bufferSize < 15)  // minimum "data_0000.csv" + null
   {
-    sprintf(fileName, "data_%04d.csv", fileNumber);
+    return false;
+  }
+  
+  uint16_t fileNumber = 0;
+
+  while (fileNumber < MAX_FILE_NUMBER)
+  {
+    snprintf(fileName, bufferSize, "data_%04d.csv", fileNumber);
     
     if (!fatfs.exists(fileName))
     {
-      currentFileName = String(fileName);
-      break;
+      errorFlags &= ~FLASH_FILE_ERROR;
+      return true;
     }
       
     fileNumber++;
   }
   
-  if (fileNumber >= 9999)
-  {
-    Serial.println("Too many data files!");
-    errorFlags |= FLASH_FILE_ERROR;
-    return false;
-  }
-  
-  Serial.print("Creating new file: ");
-  Serial.println(currentFileName.c_str());
-  errorFlags &= ~FLASH_FILE_ERROR;
-  return true;
+  Serial.println("Too many data files!");
+  errorFlags |= FLASH_FILE_ERROR;
+  return false;
 }
 
 bool Rakieta::flashOpenNewFile()
@@ -1053,8 +1149,14 @@ bool Rakieta::flashOpenNewFile()
   return true;
 }
 
-void Rakieta::flashWriteString(const String& msg)
+void Rakieta::flashWriteString(const char* msg)
 {
+  if (msg == nullptr)
+  {
+    errorFlags |= FLASH_NULL_MSG_ERROR;
+    return;
+  }
+
   if (flash.isBusy())
   {
     Serial.println("Flash not ready!");
@@ -1078,6 +1180,11 @@ void Rakieta::flashWriteString(const String& msg)
   }
   
   flashWriteCount++;
+
+  if (flashWriteCount >= FLUSH_AFTER_WRITES)
+  {
+    flashFlushBuffer();
+  }
 }
 
 void Rakieta::flashFlushBuffer()
@@ -1101,7 +1208,7 @@ void Rakieta::flashCloseFile()
   }
 }
 
-bool Rakieta::flashRecoverAfterReset()  /// wydaje mi się, że trzeba by było zmienić bo te funkcje istnieją ?
+bool Rakieta::flashRecoverAfterReset()
 {
   if (!fatfs.begin(&flash))
   {
@@ -1122,20 +1229,25 @@ bool Rakieta::flashRecoverAfterReset()  /// wydaje mi się, że trzeba by było 
     return false;
   }
 
-  File32 file;
   uint16_t maxNumber = 0;
-  char nazwaPliku[256];
+  char fileName[20];
+  File32 file;
 
   while ((file = root.openNextFile()))
   {
     if (!file.isDirectory())
     {
-      file.getName(nazwaPliku, sizeof(nazwaPliku));
-      String name = String(nazwaPliku);
-      if (name.startsWith("data_") && name.endsWith(".csv"))
+      file.getName(fileName, sizeof(fileName));
+
+      if (strncmp(fileName, "data_", 5) == 0)
       {
-        int num = name.substring(5, name.length() - 4).toInt();
-        if (num > maxNumber) maxNumber = num;
+        char* dotPos = strrchr(fileName, '.');
+        if (dotPos != nullptr && strcmp(dotPos, ".csv") == 0)
+        {
+          // Wyciągnij numer z nazwy pliku
+          int num = atoi(fileName + 5);
+          if (num > maxNumber) maxNumber = num;
+        }
       }
     }
     file.close();
@@ -1144,6 +1256,7 @@ bool Rakieta::flashRecoverAfterReset()  /// wydaje mi się, że trzeba by było 
 
   char filename[32];
   snprintf(filename, sizeof(filename), "data_%04d.csv", maxNumber);
+
   flashDataFile = fatfs.open(filename, FILE_WRITE);
   if (!flashDataFile)
   {
@@ -1173,30 +1286,32 @@ void Rakieta::flashDumpFileList()
     return;
   }
 
-  char nazwaPliku[256];
+  char fileName[20];
+  File32 file;
 
-  while ((dumpFile = root.openNextFile()))
+  while ((file = root.openNextFile()))
   {
-    if (!dumpFile.isDirectory())
+    if (!file.isDirectory())
     {
-      dumpFile.getName(nazwaPliku, sizeof(nazwaPliku));
-      String name = String(nazwaPliku);
-      if (name.endsWith(".csv"))
+      file.getName(fileName, sizeof(fileName));
+
+      size_t len = strlen(fileName);
+      if (len > 4 && strcmp(fileName + len - 4, ".csv") == 0)
       {
         Serial.print(" - ");
-        Serial.print(name);
+        Serial.print(fileName);
         Serial.print(" (size: ");
-        Serial.print(dumpFile.size());
+        Serial.print(file.size());
         Serial.println(" bytes)");
       }
     }
-    dumpFile.close();
+    file.close();
   }
   root.close();
   Serial.println("========================\n");
 }
 
-void Rakieta::flashDumpFileData(uint16_t fileNumber)
+void Rakieta::flashDumpFileData(const uint16_t fileNumber)
 {
   char filename[32];
   snprintf(filename, sizeof(filename), "data_%04d.csv", fileNumber);
@@ -1208,14 +1323,23 @@ void Rakieta::flashDumpFileData(uint16_t fileNumber)
     return;
   }
 
-  String line;
-
   Serial.printf("=== DUMP OF %s ===\n", filename);
+  char line[256];
+
   while (dumpFile.available())
   {
-    line = dumpFile.readStringUntil('\n');
-    Serial.println(line);
+    int bytesRead = 0;
+    while (dumpFile.available() && bytesRead < (int)sizeof(line) - 1)
+    {
+      char c = dumpFile.read();
+      line[bytesRead++] = c;
+      if (c == '\n') break;
+    }
+
+    line[bytesRead] = '\0';
+    Serial.print(line);
   }
+
   dumpFile.close();
   Serial.println("=== END OF FILE ===\n");
 }
@@ -1230,18 +1354,23 @@ void Rakieta::flashDumpLastFile()
   }
 
   uint16_t lastNumber = 0;
-  char nazwaPliku[15];
+  char fileName[20];
+  File32 dumpFile;
 
   while ((dumpFile = root.openNextFile()))
   {
     if (!dumpFile.isDirectory())
     {
-      dumpFile.getName(nazwaPliku, sizeof(nazwaPliku));
-      String name = String(nazwaPliku);
-      if (name.startsWith("data_") && name.endsWith(".csv"))
+      dumpFile.getName(dumpFile, sizeof(dumpFile));
+
+      if (strncmp(fileName, "data_", 5) == 0)
       {
-        int num = name.substring(5, name.length() - 4).toInt();
-        if (num > lastNumber) lastNumber = num;
+        char* dotPos = strrchr(fileName, '.');
+        if (dotPos != nullptr && strcmp(dotPos, ".csv") == 0)
+        {
+          int num = atoi(fileName + 5);
+          if (num > lastNumber) lastNumber = num;
+        }
       }
     }
     dumpFile.close();
@@ -1315,7 +1444,7 @@ bool Rakieta::detectLanding()
 }
 
 // do zastanowienia się
-bool Rakieta::checkDeploymentConditions(ParachuteType type)
+bool Rakieta::checkDeploymentConditions(const ParachuteType type)
 {
   float currentSpeed = abs(data.bmp1.lastVerticalSpeed);
   float currentAltitude = data.bmp1.altitude;
@@ -1336,12 +1465,17 @@ bool Rakieta::checkDeploymentConditions(ParachuteType type)
 void Rakieta::sendFlightSummary()
 {
   uint32_t now = millis();
-  String msg = "Flight summary:";
-  msg += "launch:" + String(now - launchDetectTime);
-  msg += ",burnout:" + String(now - burnoutDetectTime);
-  msg += ",apogee:" + String(now - apogeeDetectTime);
-  msg += ",descent:" + String(now - descentDetectTime);
-  msg += ",landed:" + String(now - landedDetectTime);
+  
+  char buffer[256];
+  
+  snprintf(buffer, sizeof(buffer),
+    "FlightSummary:launch:%lu,burnout:%lu,apogee:%lu,descent:%lu,landed:%lu",
+    (launchDetectTime == 0 ? 0 : now - launchDetectTime),
+    (burnoutDetectTime == 0 ? 0 : now - burnoutDetectTime),
+    (apogeeDetectTime == 0 ? 0 : now - apogeeDetectTime),
+    (descentDetectTime == 0 ? 0 : now - descentDetectTime),
+    (landedDetectTime == 0 ? 0 : now - landedDetectTime)
+  );
 
   flashWriteString(msg);
   transmit(msg);
@@ -1469,21 +1603,30 @@ void Rakieta::handleDebugMode()  /// do zmieniania w locie
 
   checkRadio();
 
-  /// trzeba usuwać i sprawdzać po kolei, na końcu zamienić na readSensorsData()
+  /// trzeba usuwać i sprawdzać po kolei
   handleLsm();
   handleBmp();
   handleAdxl();
   handleGPS();
   handleBattery();
-
   printData();
-  systemSleep(2500);
 }
 
 void Rakieta::handleFlightMode()
 {
   uint32_t lastRun = 0;
-  uint32_t interval = inFlight ? 20 : 60000;  /// do zmiany na define
+  
+  uint32_t interval = INTERVAL_IDLE;
+  switch (currentFlightState)
+  {
+    case IDLE:    interval = INTERVAL_IDLE;       break;
+    case BOOST:   interval = INTERVAL_BURN;       break;
+    case COAST:   interval = INTERVAL_RISING;     break;
+    case APOGEE:  interval = INTERVAL_RISING;     break;
+    case DESCENT: interval = INTERVAL_FALLING;    break;
+    case LANDED:  interval = INTERVAL_TOUCHDOWN;  break;
+    default:      interval = INTERVAL_IDLE;       break;
+  }
   
   checkRadio();
 
@@ -1496,7 +1639,8 @@ void Rakieta::handleFlightMode()
     readSensorsData();
     updateFlightState();
 
-    String msg = prepareDataLineMsg();
+    char msg[256];
+    prepareDataLineMsg(char* msg, size_t sizeof(msg));
     sendPacket();
     flashWriteString(msg);
   }
@@ -1552,6 +1696,43 @@ void Rakieta::handleSleepMode()  /// chyba będzie ok
   systemSleep(5000);
 }
 
+void Rakieta::handleModes(const uint32_t now)
+{
+  switch (currentMode)  /// zamienić to na osobną funkcję
+  {
+    case DEBUG:
+      if (now - lastDebugPrint >= INTERVAL_DEBUG)
+      {
+        lastDebugPrint = now;
+        handleDebugMode();
+      }
+      break;
+    case FLIGHT:
+      if (!flashDataFile) flashOpenNewFile();
+
+      if (now - lastFlightLoop >= INTERVAL_FLIGHT)
+      {
+        lastFlightLoop = now;
+        handleFlightMode();
+      }
+      break;
+    case DUMP:
+      if (now - lastDumpProgress >= INTERVAL_DUMP)
+      {
+        lastDumpProgress = now;
+        handleDumpMode();
+      }
+      break;
+    case SLEEP:
+      if (now - lastSleepCheck >= INTERVAL_SLEEP)
+      {
+        lastSleepCheck = now;
+        handleSleepMode();
+      }
+      break;
+  }
+}
+
 
 
 
@@ -1597,43 +1778,11 @@ void Rakieta::loop()
 {
   uint32_t now = millis();
   
-  switch (currentMode)
-  {
-    case DEBUG:
-      if (now - lastDebugPrint >= INTERVAL_DEBUG)
-      {
-        lastDebugPrint = now;
-        handleDebugMode();
-      }
-      break;
-    case FLIGHT:
-      if (!flashDataFile) flashOpenNewFile();
+  handleModes(now);
 
-      if (now - lastFlightLoop >= INTERVAL_FLIGHT)
-      {
-        lastFlightLoop = now;
-        handleFlightMode();
-      }
-      break;
-    case DUMP:
-      if (now - lastDumpProgress >= INTERVAL_DUMP)
-      {
-        lastDumpProgress = now;
-        handleDumpMode();
-      }
-      break;
-    case SLEEP:
-      if (now - lastSleepCheck >= INTERVAL_SLEEP)
-      {
-        lastSleepCheck = now;
-        handleSleepMode();
-      }
-      break;
-  }
-
-  updateLeds();
-  updateBuzzer();
-  updateSolenoid();
+  updateLeds(now);
+  updateBuzzer(now);
+  updateSolenoid(now);
 
   systemSleep(5);
 }
