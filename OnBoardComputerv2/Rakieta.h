@@ -19,23 +19,18 @@
 #include "config.h"
 
 
-// It must be here for the RadioLib module to function properly
-inline volatile bool operationDone = false;
-inline void setOperationFlag(void) { operationDone = true; }
-
-
 class Rakieta
 {
 private:
   // === Zmienne stanu ===
-  enum SystemMode {
+  enum class SystemMode {
     DEBUG,
     FLIGHT,
     DUMP,
     SLEEP
   } currentMode;
 
-  enum FlightState {
+  enum class FlightState {
     IDLE,
     BOOST,
     COAST,
@@ -44,126 +39,126 @@ private:
     LANDED
   } currentFlightState;
 
-  enum ParachuteType { DROGUE, MAIN };
+  enum class ParachuteType { DROGUE, MAIN };
 
   struct {
     struct {
-      uint8_t valid = 0;
-      float lat = 0;
-      float lng = 0;
-      float alti = 0;
+      uint8_t valid;
+      float lat;
+      float lng;
+      float alti;
     } gps;
     struct {
-      uint8_t valid = 0;
-      float ax = 0;
-      float ay = 0;
-      float az = 0;
-      float gx = 0;
-      float gy = 0;
-      float gz = 0;
+      uint8_t valid;
+      float ax;
+      float ay;
+      float az;
+      float gx;
+      float gy;
+      float gz;
     } lsm;
     struct {
-      uint8_t valid = 0;
-      float ax = 0;
-      float ay = 0;
-      float az = 0;
+      uint8_t valid;
+      float ax;
+      float ay;
+      float az;
     } adxl;
     struct {
-      uint8_t valid = 0;
-      float alti = 0;
+      uint8_t valid;
+      float alti;
     } bmp1, bmp2;
   } offsets;
 
   struct {
     struct {
-      float lat = 0;
-      float lng = 0;
-      float alti = 0;
-      uint8_t h = 0;
-      uint8_t m = 0;
-      uint8_t s = 0;
-      uint8_t centi = 0;
-      float speed = 0;
-      float course = 0;
-      uint8_t satNum = 0;
-      uint8_t hdop = 0;
-      float maxAlti = 0;
+      float lat;
+      float lng;
+      float alti;
+      uint8_t h;
+      uint8_t m;
+      uint8_t s;
+      uint8_t centi;
+      float speed;
+      float course;
+      uint8_t satNum;
+      uint8_t hdop;
+      float maxAlti;
     } gps;
     struct {
-      float ax = 0;
-      float ay = 0;
-      float az = 0;
-      float gx = 0;
-      float gy = 0;
-      float gz = 0;
-      float temp = 0;
-      float lastTotalAlti = 0;
-      float lastTotalSpeed = 0;
-      float lastTotalAccel = 0;
-      float lastTotalRotation = 0;
-      uint32_t lastTime = 0;
+      float ax;
+      float ay;
+      float az;
+      float gx;
+      float gy;
+      float gz;
+      float temp;
+      float lastTotalAlti;
+      float lastTotalSpeed;
+      float lastTotalAccel;
+      float lastTotalRotation;
+      uint32_t lastTime;
     } lsm;
     struct {
-      float ax = 0;
-      float ay = 0;
-      float az = 0;
-      float lastTotalSpeed = 0;
-      float lastTotalAccel = 0;
-      uint32_t lastTime = 0;
+      float ax;
+      float ay;
+      float az;
+      float lastTotalSpeed;
+      float lastTotalAccel;
+      uint32_t lastTime;
     } adxl;
     struct {
-      float pressure = 0;
-      float altitude = 0;
-      float temp = 0;
-      float lastAltitude = 0;
-      float lastVerticalSpeed = 0;
-      float maxAltitude = 0;
-      uint32_t lastTime = 0;
+      float pressure;
+      float altitude;
+      float temp;
+      float lastAltitude;
+      float lastVerticalSpeed;
+      float maxAltitude;
+      uint32_t lastTime;
     } bmp1, bmp2;
     struct {
-      float voltage = 0;
+      float voltage;
     } battery;
     struct {
-      float roll = 0;
-      float pitch = 0;
+      float roll;
+      float pitch;
     } orientation;
   } data;
 
   // === Operacyjne ===
-  bool offsetsSet = false;
-  bool drogueDeployed = false;
-  bool mainDeployed = false;
-  uint16_t errorFlags = 0;
+  bool offsetsSet;
+  bool drogueDeployed;
+  bool mainDeployed;
+  uint16_t errorFlags;
 
   // === Urządzenia On/Off ===
-  bool led1IsOn = false;
-  uint32_t led1OffTime = 0;
-  bool led2IsOn = false;
-  uint32_t led2OffTime = 0;
-  bool buzzerIsOn = false;
-  uint32_t buzzerOffTime = 0;
-  bool solenoid1IsOn = false;
-  uint32_t solenoid1OffTime = 0;
-  bool solenoid2IsOn = false;
-  uint32_t solenoid2OffTime = 0;
+  bool led1IsOn;
+  uint32_t led1OffTime;
+  bool led2IsOn;
+  uint32_t led2OffTime;
+  bool buzzerIsOn;
+  uint32_t buzzerOffTime;
+  bool solenoid1IsOn;
+  uint32_t solenoid1OffTime;
+  bool solenoid2IsOn;
+  uint32_t solenoid2OffTime;
 
   // === Dane przefiltrowane ===
-  float filteredAccelX = 0;
-  float filteredAccelY = 0;
-  float filteredAccelZ = 0;
-  float filteredGyroX = 0;
-  float filteredGyroY = 0;
-  float filteredGyroZ = 0;
-  float fusedAltitude = 0;
-  float prevFusedAltitude = 0;
+  float filteredAccelX;
+  float filteredAccelY;
+  float filteredAccelZ;
+  float filteredGyroX;
+  float filteredGyroY;
+  float filteredGyroZ;
+  float fusedAltitude;
+  float prevFusedAltitude;
 
   // Czasy dla detekcji
-  bool inFlight = false;
-  uint32_t launchDetectTime = 0;
-  uint32_t burnoutDetectTime = 0;
-  uint32_t apogeeDetectTime = 0;
-  uint32_t descentDetectTime = 0;
-  uint32_t landedDetectTime = 0;
+  bool inFlight;
+  uint32_t launchDetectTime;
+  uint32_t burnoutDetectTime;
+  uint32_t apogeeDetectTime;
+  uint32_t descentDetectTime;
+  uint32_t landedDetectTime;
 
   // === Obiekty SPI ===
   SPIClass spiFlash;  // SPI1: W25Q128
@@ -179,15 +174,16 @@ private:
   HardwareSerial gpsSerial;
 
   // === LoRa ===
-  uint32_t packet = 0;
-  uint32_t loraMsgStartTime = 0;
+  static volatile bool operationDone;
+  uint32_t packet;
+  uint32_t loraMsgStartTime;
   SPISettings loraSettings;
   SX1262 lora;
   BitStorage message;
 
   // === Flash ===
-  uint16_t flashWriteCount = 0;
-  uint32_t dumpAddress = 0;
+  uint16_t flashWriteCount;
+  uint32_t dumpAddress;
   // String currentFileName;
   File32 flashDataFile;
   File32 dumpFile;
@@ -196,28 +192,32 @@ private:
   FatVolume fatfs;
 
   // === Zarządzanie czasem ===
-  uint32_t lastWatchdogTime = 0;
-  uint32_t lastFlightLoop = 0;
-  uint32_t lastDebugPrint = 0;
-  uint32_t lastDumpProgress = 0;
-  uint32_t lastSleepCheck = 0;
-  uint32_t lastFlightModeLoop = 0;
+  uint32_t lastErrorCheckTime;
+  uint32_t lastFlightLoop;
+  uint32_t lastDebugPrint;
+  uint32_t lastDumpProgress;
+  uint32_t lastSleepCheck;
+  uint32_t lastFlightModeLoop;
 
 
   void initGPIO();
   void initSPI();
   bool initLSM();
   bool initADXL();
-  bool initBMP();
+  bool initBMP1();
+  bool initBMP2();
   bool initGPS();
+
   void updateLeds(const uint32_t now);
   void updateBuzzer(const uint32_t now);
   void updateSolenoid(const uint32_t now);
+
   void systemReset();
   void systemSleep(const uint32_t time);
   void setSystemMode();
   void printSystemMode();
   void printFlightMode();  /// prawdopodobnie do usunięcia bo nigdzie nie będzie używane
+
   void handleBattery();  // tzreba sprawdzić czy odpowiednie są przeliczniki
   void handleLsm();
   void handleAdxl();
@@ -232,17 +232,19 @@ private:
   void filterGyro();  /// nigdzie nie używane
   void calculateOrientation();  /// nigdzie nie używane
   void fuseBMPAndIMU();  /// nigdzie nie używane
+
   bool initLora();
+  static void setOperationFlag();
   void prepareLoraStatusMsg(char* buffer, size_t bufferSize);
   void preparePacket();
   void sendPacket();
   void transmit(const uint8_t* msg, const size_t len);
-  void transmit(const uint8_t *msg);
   void transmit(const char* msg, size_t len);
   void startListening();
   void handleCommand(const char* command);
   void checkRadio();
   void sendGpsOffset();
+
   bool initFlash();
   bool flashFindNextFileNumber(char* fileName, size_t bufferSize);
   bool flashOpenNewFile();
@@ -253,17 +255,22 @@ private:
   void flashDumpFileList();
   void flashDumpFileData(const uint16_t fileNumber);
   void flashDumpLastFile();
+
   bool detectLaunch();
   bool detectBurnout();
   bool detectApogee();
   bool detectLanding();
   bool checkDeploymentConditions(const ParachuteType type);
+
   void sendFlightSummary();
   void drogueParashuteOpen();
   void mainParashuteOpen();
   void updateFlightState();
+
   void initWatchdog();
   void watchdog();
+  void reinitComponent(bool (*initFunc)());  // helper do reinicjalizacji
+  void handleErrors();                           // główna funkcja obsługi błędów
 
   void handleDebugMode();  /// do zmieniania w locie
   void handleFlightMode();
@@ -271,7 +278,7 @@ private:
   void handleSleepMode();  /// chyba będzie ok
   void handleModes(const uint32_t now);
 
-  
+
 public:
   Rakieta();
   ~Rakieta();
@@ -279,5 +286,6 @@ public:
   void init();
   void loop();
 };
+
 
 #endif  // RAKIETA_H
