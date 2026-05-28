@@ -1,6 +1,101 @@
 #include "Rakieta.h"
 
 
+/*
+  1. Ograniczone użycie const   -    W wielu metodach, które nie modyfikują stanu obiektu, brakuje deklaracji const. Na przykład printData(), prepareDataLineMsg(), prepareOffsetsMsg(), sendFlightSummary() – wszystkie powinny być const, ponieważ tylko odczytują dane. Brak const utrudnia kompilatorowi optymalizacje i wprowadza w błąd programistę co do intencji funkcji. W systemie krytycznym każda metoda, która nie zmienia obiektu, powinna być jawnie oznaczona jako const.
+  2. Użycie String   -    Kod intensywnie używa String do budowania komunikatów (np. prepareDataLineMsg(), prepareOffsetsMsg(), sendFlightSummary(), handleCommand()). Klasa String z Arduino dynamicznie alokuje pamięć na stercie, co jest zabronione w standardach MISRA/JSF. W locie może to prowadzić do fragmentacji, nieprzewidywalnych opóźnień lub wyczerpania pamięci. Wszystkie operacje na napisach powinny być zastąpione statycznymi buforami char[] i snprintf().
+  4. Brak pełnego użycia constexpr   -    W config.h wszystkie stałe zdefiniowano za pomocą #define, a w Rakieta.cpp nie ma ani jednego constexpr. Makra preprocesora nie mają typu, nie podlegają sprawdzeniu składniowemu i nie są widoczne w debuggerze. Zamiast #define FREQUENCY 868 powinno być constexpr int FREQUENCY = 868. constexpr daje typowanie i możliwość sprawdzenia stałych w czasie kompilacji.
+  5. Ograniczone użycie list inicjalizacyjnych   -    W konstruktorze Rakieta::Rakieta() lista inicjalizacyjna jest długa, ale niektóre pola (np. errorFlags) nie są na niej umieszczone, mimo że mają być inicjalizowane. Co prawda errorFlags ma inicjalizator w klasie (uint16_t errorFlags = 0), co jest dobre, ale w innych miejscach (np. operationDone jako zmienna globalna) brakuje inicjalizacji. W systemie krytycznym preferuje się inicjalizację na liście konstruktora zamiast późniejszego przypisania.
+  23. Ograniczone użycie semantic typing (silne typowanie)   -    Stany lotu (IDLE, BOOST, ...) są zdefiniowane jako zwykły enum, a nie enum class. Przez to mogą być niejawnie konwertowane na int, co może prowadzić do błędów (np. przypisanie wartości spoza zakresu). enum class zapewnia bezpieczeństwo typów.
+  8. Brak pełnej centralizacji maszyny stanów (FSM)   -    System ma dwa poziomy stanów: SystemMode (DEBUG, FLIGHT, DUMP, SLEEP) oraz FlightState (IDLE, BOOST, COAST, ...). Logika przejść jest rozproszona: w loop() jest switch dla trybów systemowych, w updateFlightState() switch dla stanów lotu, a dodatkowo osobne funkcje detectLaunch(), detectBurnout() itp. Brak jednej, spójnej maszyny stanów z jawnymi przejściami. W systemie krytycznym wszystkie stany i przejścia powinny być widoczne w jednym miejscu.
+  13. Brak architektury watchdog   -    W kodzie zdefiniowano funkcje initWatchdog() i watchdog(), ale nigdzie nie są one wywołane – brak inicjalizacji watchdog w init() i brak okresowego odświeżania w pętli głównej. Watchdog jest podstawowym mechanizmem wykrywania zawieszenia programu w systemach krytycznych. Bez niego, jeśli program wejdzie w nieskończoną pętlę lub zablokuje się na operacji I/O, system nigdy się nie zresetuje.
+  19. Brak jednolitego modelu obsługi błędów   -    Błędy są obsługiwane lokalnie poprzez ustawienie bitów w errorFlags, ale nie ma centralnego mechanizmu, który agreguje błędy. Różne funkcje wypisują komunikaty o błędach na Serial, ale nie ma spójnego logowania ani reakcji.
+  11. Ograniczone programowanie defensywne   -    Mimo że kod sprawdza, czy komunikacja z sensorami się powiodła (np. if(lsm.getEvent(...))), brakuje walidacji zakresów odczytanych wartości. Przykład: w handleBmp() ciśnienie może wynieść 0 hPa lub ujemną wysokość – nie jest to sprawdzane. W handleLsm() przyspieszenie może przekroczyć zakres ±16g z powodu błędu. System powinien traktować każdą wartość z sensora jako potencjalnie błędną i wykonywać sanity check (np. if (abs(ax) > 20.0f) ax = 0).
+  3. Magic numbers   -    W kodzie rozsiane są liczby bez nazwanych stałych: 1013.25 (w handleBmp i setOffsets), 4095.0f (w handleBattery), 50, 25, 10 (w setOffsets), 30000 (timeout), 0.5f (filtr), 1.0f (w detectApogee), 20 i 60000 (w handleFlightMode), 200, 100 itp. Utrudnia to strojenie i zrozumienie logiki. Każda taka liczba powinna być zdefiniowana jako constexpr z opisową nazwą.
+  22. Brak pełnej izolacji konfiguracji   -    Mimo że istnieje config.h, niektóre parametry są wciąż rozproszone: 1013.25 (ciśnienie referencyjne), 4095.0f (zakres ADC), 9600 (baudrate GPS), 0x76 (adres I2C – brak go w config.h?). W Rakieta.cpp pojawiają się też liczby jak 0.5f dla filtru, 1.0f dla detekcji apogeum. Wszystkie parametry powinny być zebrane w jednym miejscu (config.h lub struktura konfiguracyjna).
+*/
+
+/*
+  NA TERAZ (ŁATWE):
+
+  6. Zbyt szeroki scope funkcji/danych   -    Wiele funkcji pomocniczych jest zadeklarowanych jako prywatne metody klasy Rakieta, choć mogłyby być funkcjami wolnymi static lub w anonimowej przestrzeni nazw w pliku Rakieta.cpp. Przykłady: calcChecksum (choć nie istnieje), floatToString (brak), ale też flashRecoverAfterReset(), flashDumpFileList() – nie potrzebują dostępu do prywatnych pól? Część z nich faktycznie korzysta z pól, ale wiele mogłoby być static. Zwiększa to widoczność symboli i utrudnia analizę przepływu.
+  7. Niejawne konwersje typów   -    W kodzie występują niejawne konwersje, np. w handleBattery: rawValue (int) jest mnożone przez 4.2f – to konwersja na float, ale brak static_cast. W detectApogee porównanie float z float bez upewnienia się, że wartości nie są NaN. W setOffsets dodawanie do siebie wartości różnych typów (int, float). Standard JSF wymaga jawnych rzutowań (static_cast) dla wszystkich konwersji, aby uniknąć niezdefiniowanego zachowania i utraty precyzji.
+  9. Funkcja loop() ma wiele odpowiedzialności   -    Rakieta::loop() nie jest bardzo długa, ale pośrednio przez wywołania handleDebugMode(), handleFlightMode() itp. zarządza całym systemem. handleFlightMode() natomiast wykonuje odczyt sensorów, aktualizację stanu lotu, przygotowanie pakietu, wysyłkę LoRa, zapis na flash – to zbyt wiele odpowiedzialności. Zgodnie z zasadą "jedna funkcja – jedna odpowiedzialność", każda z tych operacji powinna być wydzielona do osobnych funkcji.
+  12. Brak pełnej architektury odzyskiwania po awarii (fault recovery)   -    Kod ustawia flagi błędów (errorFlags), ale nie definiuje jawnego bezpiecznego stanu ani trybu ograniczonej funkcjonalności. Na przykład, gdy GPS przestanie działać w locie, system kontynuuje lot według ostatnich danych, zamiast przejść w tryb awaryjny (np. nawigacja bezwładnościowa). Wymagane jest zdefiniowanie dla każdego błędu konkretnej reakcji: reset komponentu, przejście do trybu degraded, awaryjne lądowanie.
+  14. Ograniczone sprawdzanie zakresów danych   -    Dane z sensorów są używane w obliczeniach bez weryfikacji, czy są fizycznie możliwe. Na przykład w detectApogee() porównuje się data.bmp1.lastVerticalSpeed <= APOGEE_VELOCITY_THRESHOLD – ale jeśli lastVerticalSpeed jest NaN lub nieskończonością, wynik będzie nieprawidłowy. Należy przed każdym użyciem sprawdzać, czy wartość jest skończona i mieści się w oczekiwanym przedziale (np. isfinite()).
+  15. Brak jawnych timeoutów dla części operacji   -    Operacje odczytu z I2C, SPI czy GPS nie mają zdefiniowanych timeoutów. Na przykład gps.encode() czyta z bufora UART, ale jeśli dane przestaną napływać, program nie ma informacji o tym po czasie. W transmit() jest timeout dla LoRa, ale to wyjątek. Każda operacja, która może blokować, powinna mieć limit czasu, po którym zostaje przerwana, a komponent oznaczony jako uszkodzony.
+  16. Brak separacji warstw logicznych (HAL vs. logika lotu)   -    Klasa Rakieta bezpośrednio miesza wywołania bibliotek sensorów (Adafruit_LSM6DS, TinyGPS++, SX1262) z logiką decyzyjną lotu (detekcja startu, apogeum). Utrudnia to testowanie (nie można zasymulować sensorów) i zmiany sprzętu. Wzorzec Hardware Abstraction Layer (HAL) nakazuje oddzielenie sterowania od konfiguracji i odczytu sprzętu.
+  25. Ograniczone użycie compile-time validation   -    Brak static_assert dla parametrów konfiguracyjnych. Na przykład SF (spreading factor) powinien być w zakresie 6–12, ale nie jest to sprawdzone w czasie kompilacji. static_assert(SF >= 6 && SF <= 12, "SF out of range") wykryłoby błąd natychmiast, zamiast czekać na nieprawidłowe działanie LoRa w locie.
+  26. Brak pełnej analizy stanów awaryjnych (FMEA)   -    Kod nie definiuje zachowania dla wielu potencjalnych awarii: co się dzieje, gdy BMP1 działa, ale BMP2 nie? Gdy GPS wysyła błędne dane (np. nagła zmiana pozycji o kilometr)? Gdy LoRa nie może nadać pakietu przez dłuższy czas? Brakuje analizy trybów uszkodzeń i efektów (FMEA) oraz zdefiniowanych reakcji dla każdego scenariusza.
+  27. Brak formalnego odzyskiwania stanu (state recovery)   -    Po wykryciu błędu (np. errorFlags |= LSM_ERROR) system nie podejmuje próby przywrócenia sprawności – nie resetuje czujnika, nie ponawia inicjalizacji, nie przełącza na redundantny sensor. W lotnictwie wymaga się, aby system miał zdolność do powrotu do znanego bezpiecznego stanu po błędzie przejściowym (np. restart magistrali I2C).
+  28. Ograniczone logowanie diagnostyczne   -    W trybie FLIGHT logowane są tylko dane telemetryczne (flashWriteString), ale nie loguje się błędów, zmian stanów, timeoutów ani innych zdarzeń systemowych. W przypadku katastrofy brak logów uniemożliwi analizę przyczyny. System powinien zapisywać pełną diagnostykę (z timestampem) do pamięci nieulotnej, a w trybie DEBUG wysyłać przez Serial.
+  29. Zbyt duża złożoność cyklomatyczna (cyclomatic complexity)   -    Funkcje takie jak updateFlightState() mają zagnieżdżone switch i if, co prowadzi do złożoności > 15. handleFlightMode() również zawiera wiele ścieżek. Wysoka złożoność utrudnia testowanie wszystkich możliwych przejść i zwiększa ryzyko niewykrytych błędów. Należy podzielić te funkcje na mniejsze, proste jednostki.
+  30. Brak formalnej separacji faz systemu   -    Fazy: startup, kalibracja, standby, lot, odzyskiwanie, awaria – nie są odseparowane architektonicznie. W kodzie warunki typu if (currentMode == FLIGHT) są rozsiane, a przejścia między fazami są ukryte w różnych funkcjach. Wzorzec "State Machine" z oddzielnymi klasami dla każdego stanu (np. class FlightState, class DebugState) ułatwia dodawanie nowych faz i zapewnia, że logika każdej fazy jest zamknięta w jednym miejscu.
+  
+  NA PÓŹNIEJ:
+  10. Użycie delay()   -    W Rakieta.cpp wielokrotnie używane jest delay(): w setOffsets() delay(25) i delay(200), w initGPS() delay(500), w transmit() delay(1), w systemSleep() delay(time). delay() blokuje wykonanie całego programu na zadany czas, co w systemie czasu rzeczywistego jest niedopuszczalne – prowadzi do utraty danych z sensorów i braku reakcji na krytyczne zdarzenia. Należy zastąpić delay() nieblokującymi timerami opartymi na millis().
+  20. Ograniczona przewidywalność czasowa   -    Użycie delay(), String, Serial.print oraz blokujących operacji I2C/SPI powoduje, że czas wykonania funkcji jest nieokreślony. W systemie czasu rzeczywistego wymagana jest analiza najgorszego czasu wykonania (WCET) i dowiedzenie, że wszystkie terminy są dotrzymane. Obecny kod nie daje żadnych gwarancji – np. handleBmp() może wykonać się szybko lub wolno w zależności od stanu czujnika.
+  21. Możliwe użycie funkcji niedeterministycznych   -    millis() jest zwykle deterministyczne, ale String alokuje pamięć, co może powodować nieprzewidywalne opóźnienia. Ponadto biblioteki Adafruit mogą wewnętrznie używać delay() lub pętli oczekujących, które nie mają gwarantowanego czasu. Standard JSF wymaga eliminacji wszystkich niedeterministycznych konstrukcji, a jeśli to niemożliwe – ścisłej kontroli.
+  24. Brak pełnej kontroli overflow/underflow   -    W obliczeniach całkujących (np. data.lsm.lastTotalSpeed += data.lsm.lastTotalAccel * dt) nie ma zabezpieczeń przed przekroczeniem zakresu float ani przed wartościami NaN. W systemie krytycznym po każdej operacji arytmetycznej należy sprawdzić, czy wynik jest skończony i mieści się w oczekiwanym przedziale, a w razie potrzeby nasycić wartość lub przejść w stan awaryjny.
+*/
+
+/*
+  TO DO:
+  -sprawdzić  "AIR VEHICLE C++ CODING STANDARDS FOR THE SYSTEM DEVELOPMENT AND DEMONSTRATION PROGRAM"
+    5. Ograniczyć widoczność symboli   -   Funkcje lokalne oznaczać jako static lub umieszczać w anonymous namespace. Minimalizuje to coupling.
+    10. Dodać sanity-checki   -   Walidować zakresy danych sensorów i timeouty komunikacji. To zwiększy odporność systemu.
+    12. Wprowadzić fault manager   -   Stworzyć centralny system zarządzania błędami. Wszystkie moduły powinny raportować błędy w jednolity sposób.
+    13. Rozdzielić warstwy systemu   -   Oddzielić logikę lotu od bezpośredniej obsługi hardware. Ułatwi to rozwój i testowanie.
+    14. Dodać recovery modes   -   Zdefiniować zachowanie systemu po awarii sensora lub komunikacji. System powinien mieć jawne fail-safe behavior.
+    15. Ujednolicić konfigurację   -   Wszystkie parametry systemu trzymać w jednym module konfiguracyjnym. Ułatwi to strojenie rakiety.
+    18. Rozszerzyć diagnostykę   -   Logować więcej informacji o błędach i stanach systemu. Ułatwi to debugowanie lotów.
+    19. Ograniczyć złożoność funkcji   -   Długie funkcje dzielić na mniejsze kroki logiczne. Poprawia to maintainability.
+    20. Dodać compile-time checks   -   Używać static_assert dla krytycznych parametrów konfiguracyjnych. Pozwala to wykrywać błędy podczas kompilacji.
+  
+  -zrobić graficzne przedstawienie blokowe jak ma działać cały system
+
+
+  -dodać funkcję sprawdzającą ile jest dostępnego miejsca na flash - jeśli jest mało powiadom użytkownika
+  -dodać led_2 jako oznacznie errorów
+  -w funkcjach filter dodać pozostałe czujniki ze sprawdzaniem errorów
+  -zrobić funkcję handleErrors()
+  -checkRadio() zapisuje dostarczoną komendę na flash
+
+  Dokumentacja i komentarze:
+      Dodaj szczegółowe komentarze do kodu, zwłaszcza w sekcjach związanych z obsługą błędów i watchdogiem.
+      Zaktualizuj sekcję TO DO w kodzie na podstawie Twoich odpowiedzi.
+
+  Obsługa błędów:
+      Rozbuduj funkcję handleErrors(), aby automatycznie restartowała uszkodzone komponenty.
+      Dodaj logikę do trybu FLIGHT, która sprawdza stan wszystkich komponentów na początku lotu.
+
+  Zapis danych:
+      Upewnij się, że zapis do flash jest odporny na przerwania (np. poprzez blokady).
+      Rozważ kompresję danych przed zapisem, jeśli pamięć flash jest ograniczona.
+
+  Optymalizacja energii:
+      Wprowadź bardziej zaawansowane strategie oszczędzania energii (np. głębszy sleep dla nieużywanych komponentów).
+      Monitoruj zużycie energii w różnych trybach.
+
+  Testowanie:
+      Stwórz scenariusze testowe w trybie DEBUG, aby przetestować różne ścieżki kodu.
+      Symuluj awarie komponentów i sprawdź, czy mechanizmy naprawcze działają poprawnie.
+
+  namespace
+  {
+    // Funkcje pomocnicze, które nie potrzebują dostępu do pól klasy
+    float clamp(float val, float minVal, float maxVal)
+    {
+        return (val < minVal) ? minVal : (val > maxVal) ? maxVal : val;
+    }
+    
+    bool isValueValid(float val, float minVal, float maxVal)
+    {
+        return !isnan(val) && !isinf(val) && val >= minVal && val <= maxVal;
+    }
+  }
+*/
+
 // === Konstruktor ===
 Rakieta::Rakieta():
   // === Zmienne stanu ===
@@ -830,7 +925,7 @@ void Rakieta::prepareLoraStatusMsg(char* buffer, size_t bufferSize)
   memset(buffer, 0, bufferSize);
 
   int written = snprintf(buffer, bufferSize,
-    "=== RADIO STATUS ===\nFrequency:%luMHz,Moc:%ludBm,SF:luBW:lukHz,CR:4/%lu ";
+    "=== RADIO STATUS ===\nFrequency:%luMHz,Moc:%ludBm,SF:%luBW:%lukHz,CR:4/%lu",
     FREQUENCY,
     POWER,
     SF,
@@ -1022,7 +1117,7 @@ void Rakieta::checkRadio()
         Serial.print(lora.getSNR());
         Serial.println(F(" dB"));
     */
-    handleCommand(reinterpret_cast<char*>(buffer), len);
+    handleCommand(reinterpret_cast<char*>(buffer));
     errorFlags &= ~LORA_ERROR;
   }
   else if (state != RADIOLIB_ERR_RX_TIMEOUT)
@@ -1040,8 +1135,9 @@ void Rakieta::checkRadio()
 void Rakieta::sendGpsOffset()
 {
   if (!offsetsSet) return;
-  if (buffer == nullptr || bufferSize <= 0) return;
 
+  char buffer[128];
+  const size_t bufferSize = sizeof(buffer);
   memset(buffer, 0, bufferSize);
 
   int written = snprintf(buffer, bufferSize,
@@ -1814,3 +1910,14 @@ void Rakieta::loop()
   watchdog();
   systemSleep(5);
 }
+
+
+
+
+
+
+
+
+
+
+

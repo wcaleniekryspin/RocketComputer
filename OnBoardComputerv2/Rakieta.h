@@ -18,6 +18,84 @@
 #include <BitStorage.h>
 #include "config.h"
 
+/*
+  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/OnBoardComputerv2.ino
+  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/Rakieta.h
+  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/Rakieta.cpp
+  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/config.h
+*/
+
+
+/* kolejność:
+  systemReset                     w loraHandleCommand
+  systemSleep                     w loraHandleCommand, handleSleepMode
+  setSystemMode                   w init
+  printSystemMode                 w 
+  printFlightMode                 w 
+
+  readBatteryVoltage              w readSensorData
+  readGpsData                     w readSensorData
+  readLsmData                     w readSensorData
+  readAdxlData                    w readSensorData
+  readBmpData                     w readSensorData
+  readSensorData                  w superloop
+  filterAcceleration              po readSensorData
+  filterGyro                      po readSensorData
+  filterLowPass  | float filterLowPass(float raw, float prev, float alpha) { return alpha * raw + (1 - alpha) * prev; }
+
+  calculateAltitude               po readSensorData
+  calculateOrientation            po readSensorData
+  calculateVerticalVelocity       po calculateAltitude
+  fuseBMPAndIMU                   po filtrach    | fusedAltitude = alpha * (bmpAltitude) + (1 - alpha) * (prevFused + verticalAccel * dt)
+  kalmanFilter                    po fuseBMPAndIMU
+
+  loraInit                        w setup
+  loraPrintStatus                 w setup
+  loraPrepareMsg                  w loraSendPacket
+  loraSendString                  w 
+  loraSendPacket                  w handleFlightMode
+  loraStartListening              w superloop
+  loraSendGpsOffset               w loraHandleCommand
+  loraHandleCommand               w loraCheckRadio
+  loraCheckRadio                  w superloop
+
+  flashInit                       w init
+  flashFindNextFileNumber         po flashInit
+  flashOpenNewFile                w handleFlightMode
+  flashWriteData                  w superloop
+  flashWriteRocketData            w superloop
+  flashFlushBuffer                przed resetem i co jakiś czas
+  flashCloseFile                  po  =======  taczdałn
+  flashRecoverAfterReset          podczas boot
+  flashDumpFileList               w handleDumpMode
+  flashDumpFileData               w handleDumpMode
+  flashDumpLastFile               w handleDumpMode
+
+  ? checkDeploymentConditions    w detectApogee
+  drogueParashuteOpen             w detectApogee
+  mainParashuteOpen               w descent
+  detectLaunch                    w updateFlightState
+  detectBurnout                   w updateFlightState
+  detectApogee                    w updateFlightState
+  detectLanding                   w updateFlightState
+  updateFlightState               w superloop
+
+  watchdog                        w superloop
+  updateBuzzer                    w superloop
+  updateStatus                    w superloop
+  updateSolenoid                  w superloop
+  setOffsets                      w init
+  prepareOffsetsMsg               w loraHandleComand
+
+  handleDebugMode                 w superloop
+  handleFlightMode                w superloop
+  handleDumpMode                  w superloop
+  handleSleepMode                 w superloop
+
+  systemInit
+  systemLoop
+*/
+
 
 class Rakieta
 {
