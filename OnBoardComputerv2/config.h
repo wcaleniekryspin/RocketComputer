@@ -85,6 +85,8 @@ constexpr ADXL_ERROR                         = BV16(4);
 constexpr GPS_ERROR                          = BV16(5);
 constexpr FLASH_ERROR                        = BV16(6);
 constexpr FLASH_FILE_ERROR                   = BV16(7);
+constexpr FLASH_NULL_MSG_ERROR               = BV16(8);
+constexpr MSG_TOO_LONG_ERROR                 = BV16(9);
 
 // ============================================================
 // KONFIGURACJA LORA
@@ -100,6 +102,8 @@ constexpr uint16_t LORA_TX_TIMEOUT         = 500;      // ms
 // ============================================================
 // KONFIGURACJA CZUJNIKÓW I OBLICZEŃ
 // ============================================================
+constexpr uint16_t SOLENOID_DELAY                  = 100;    // ms
+
 constexpr float FUSION_ALPHA                       = 0.8f;
 constexpr float ADXL375_MG2G_MULTIPLIER            = 0.049f;  // trzeba sprawdzić czy to dodać → / ADXL343_MG2G_MULTIPLIER)
 constexpr float REFERENCE_PRESSURE_HPA             = 1013.25f;
@@ -109,6 +113,25 @@ constexpr uint8_t OFFSETS_GPS_READ                 = 10;
 
 constexpr float BATTERY_FULL_VOLTAGE               = 4.2f;      // V
 constexpr float BATTERY_MAX_READ                   = 4095.0f;
+
+constexpr uint32_t INTERVAL_ERROR_CHECK            = 1000;      // ms
+constexpr float MAX_ACCEL_LSM                      = 150.0f;   // m/s²
+constexpr float MAX_ACCEL_ADXL                     = 150.0f;   // m/s²
+constexpr float MAX_GYRO                           = 2000.0f;  // dps
+
+constexpr float MIN_PRESSURE                       = 500.0f;
+constexpr float MAX_PRESSURE                       = 1100.0f;
+constexpr float MIN_ALTITUDE                       = -100.0f;
+constexpr float MAX_ALTITUDE                       = 5000.0f;
+constexpr float MIN_SPEED                          = -2000.0f;
+constexpr float MAX_SPEED                          = 2000.0f;
+constexpr float MIN_TEMP                           = -20.0f;
+constexpr float MAX_TEMP                           = 60.0f;
+
+
+
+
+
 
 // ============================================================
 // DETEKCJA FAZ LOTU (wartości progowe)
@@ -166,6 +189,9 @@ constexpr uint16_t FLUSH_AFTER_WRITES     = 10;
 
 constexpr uint16_t GPS_BAUNDRATE          = 9600;
 constexpr uint16_t MAX_FILE_NUMBER        = 9999;
+
+
+
 
 
 
