@@ -3,8 +3,8 @@
 // === Konstruktor ===
 Rakieta::Rakieta():
   // === Zmienne stanu ===
-  currentMode(DEBUG),
-  currentFlightState(IDLE),
+  currentMode(SystemMode::DEBUG),
+  currentFlightState(FlightState::IDLE),
 
   // === Offsets ===
   offsets{},
@@ -64,6 +64,7 @@ Rakieta::Rakieta():
   // === LoRa ===
   packet(0),
   loraMsgStartTime(0),
+  operationDone(false),
   loraSettings(2000000, MSBFIRST, SPI_MODE0),
   lora(new Module(CS_LORA, DIO1_LORA, RST_LORA, BUSY_LORA, spiLora)),
   
@@ -283,11 +284,11 @@ void Rakieta::setSystemMode()
   
   switch (modeCode)
   {
-    case 0b0000: currentMode = DEBUG;  break;
-    case 0b0001: currentMode = FLIGHT; break;
-    case 0b0010: currentMode = DUMP;   break;
-    case 0b0011: currentMode = SLEEP;  break;
-    default:     currentMode = DEBUG;  break;
+    case 0b0000: currentMode = SystemMode::DEBUG;  break;
+    case 0b0001: currentMode = SystemMode::FLIGHT; break;
+    case 0b0010: currentMode = SystemMode::DUMP;   break;
+    case 0b0011: currentMode = SystemMode::SLEEP;  break;
+    default:     currentMode = SystemMode::DEBUG;  break;
   }
 }
 
@@ -296,30 +297,30 @@ void Rakieta::printSystemMode()
   Serial.print("[SYSTEM MODE] ");
   switch (currentMode)
   {
-    case DEBUG:  Serial.println("DEBUG");  break;
-    case FLIGHT: Serial.println("FLIGHT"); break;
-    case DUMP:   Serial.println("DUMP");   break;
-    case SLEEP:  Serial.println("SLEEP");  break;
+    case SystemMode::DEBUG:  Serial.println("DEBUG");  break;
+    case SystemMode::FLIGHT: Serial.println("FLIGHT"); break;
+    case SystemMode::DUMP:   Serial.println("DUMP");   break;
+    case SystemMode::SLEEP:  Serial.println("SLEEP");  break;
   }
 }
 
 void Rakieta::printFlightMode()  /// prawdopodobnie do usunięcia bo nigdzie nie będzie używane
 {
   Serial.print("[FLIGHT MODE] ");
-  switch (currentMode)
+  switch (currentFlightState)
   {
-    case IDLE:    Serial.println("IDLE");     break;
-    case BOOST:   Serial.println("BOOST");    break;
-    case COAST:   Serial.println("COAST");    break;
-    case APOGEE:  Serial.println("APOGEE");   break;
-    case DESCENT: Serial.println("DESCENT");  break;
-    case LANDED:  Serial.println("LANDED");   break;
+    case FlightState::IDLE:    Serial.println("IDLE");     break;
+    case FlightState::BOOST:   Serial.println("BOOST");    break;
+    case FlightState::COAST:   Serial.println("COAST");    break;
+    case FlightState::APOGEE:  Serial.println("APOGEE");   break;
+    case FlightState::DESCENT: Serial.println("DESCENT");  break;
+    case FlightState::LANDED:  Serial.println("LANDED");   break;
   }
 }
 
 void Rakieta::handleBattery()  // tzreba sprawdzić czy odpowiednie są przeliczniki
 {
-  int rawValue = analogRead(BATTERY);
+  float rawValue = analogRead(BATTERY);
   data.battery.voltage = (rawValue * BATTERY_FULL_VOLTAGE / BATTERY_MAX_READ);
 }
 
@@ -718,7 +719,7 @@ bool Rakieta::initLora()
 
   if (state == RADIOLIB_ERR_NONE)
   {
-    lora.setDio1Action(setOperationFlag);
+    lora.setDio1Action(Rakieta::setOperationFlag);
     Serial.println(prepareLoraStatusMsg());
     Serial.println("[LoRa] OK");
     errorFlags &= ~LORA_ERROR;
@@ -729,6 +730,11 @@ bool Rakieta::initLora()
   Serial.println(state);
   errorFlags |= LORA_ERROR;
   return false;
+}
+
+void Rakieta::setOperationFlag()
+{
+  operationDone = true;
 }
 
 void Rakieta::prepareLoraStatusMsg(char* buffer, size_t bufferSize)
@@ -866,12 +872,6 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
     operationDone = true;
     startListening();
   }
-}
-
-void Rakieta::transmit(const uint8_t *msg)
-{
-  if (msg == nullptr) return;
-  transmit(reinterpret_cast<const uint8_t*>(msg), strlen(msg));
 }
 
 void Rakieta::transmit(const char* msg, size_t len)
@@ -1409,7 +1409,7 @@ void Rakieta::updateFlightState()
   
   switch (currentFlightState)
   {
-    case IDLE:
+    case FlightState::IDLE:
       if (detectLaunch())
       {
         currentFlightState = BOOST;
@@ -1418,7 +1418,7 @@ void Rakieta::updateFlightState()
         Serial.println("[FLIGHT] -> BOOST");
       }
       break;
-    case BOOST:
+    case FlightState::BOOST:
     {
       if (detectBurnout())
       {
@@ -1428,7 +1428,7 @@ void Rakieta::updateFlightState()
       }
       break;
     }
-    case COAST:
+    case FlightState::COAST:
     {
       if (detectApogee())
       {
@@ -1438,7 +1438,7 @@ void Rakieta::updateFlightState()
       }
       break;
     }
-    case APOGEE:
+    case FlightState::APOGEE:
     {
       if ((!drogueDeployed && checkDeploymentConditions(DROGUE)) || (millis() - launchDetectTime > DROGUE_PARASHUTE_TIMEOUT))
       {
@@ -1451,7 +1451,7 @@ void Rakieta::updateFlightState()
       }
       break;
     }
-    case DESCENT:
+    case FlightState::DESCENT:
     {
       if ((!mainDeployed && checkDeploymentConditions(MAIN)) || (millis() - launchDetectTime > MAIN_PARASHUTE_TIMEOUT))
       {
@@ -1468,7 +1468,7 @@ void Rakieta::updateFlightState()
       }
       break;
     }
-    case LANDED:
+    case FlightState::LANDED:
       sendFlightSummary();
       inFlight = false;
       flashCloseFile();
@@ -1491,12 +1491,11 @@ void Rakieta::initWatchdog()
 
 void Rakieta::watchdog()
 {
-  if (inFlight)
-  {
-    IWDG1->KR = 0xAAAA;
-    lastWatchdogTime = millis();
-  }
+  IWDG1->KR = 0xAAAA;
+  lastWatchdogTime = millis();
 }
+
+
 
 
 
@@ -1566,7 +1565,7 @@ void Rakieta::handleDumpMode()  /// nie wiem co tu się dzieje obecnie
   if (dumpAddress >= totalLength)
   {
     Serial.println("\n--- Koniec dump. Przechodzę do SLEEP ---");
-    currentMode = SLEEP;
+    currentMode = SystemMode::SLEEP;
   }
 }
 
@@ -1583,25 +1582,25 @@ void Rakieta::handleSleepMode()  /// chyba będzie ok
   }
   else
   {
-    currentMode = SLEEP;
+    currentMode = SystemMode::SLEEP;
   }
   
   // TODO: tu można dodać faktyczne uśpienie (__WFI())
   systemSleep(5000);
 }
 
-void Rakieta::handleModes(const uint32_t now)
+void Rakieta::updateState(const uint32_t now)
 {
   switch (currentMode)  /// zamienić to na osobną funkcję
   {
-    case DEBUG:
+    case SystemMode::DEBUG:
       if (now - lastDebugPrint >= INTERVAL_DEBUG)
       {
         lastDebugPrint = now;
         handleDebugMode();
       }
       break;
-    case FLIGHT:
+    case SystemMode::FLIGHT:
       if (!flashDataFile) flashOpenNewFile();
 
       if (now - lastFlightLoop >= INTERVAL_FLIGHT)
@@ -1610,14 +1609,14 @@ void Rakieta::handleModes(const uint32_t now)
         handleFlightMode();
       }
       break;
-    case DUMP:
+    case SystemMode::DUMP:
       if (now - lastDumpProgress >= INTERVAL_DUMP)
       {
         lastDumpProgress = now;
         handleDumpMode();
       }
       break;
-    case SLEEP:
+    case SystemMode::SLEEP:
       if (now - lastSleepCheck >= INTERVAL_SLEEP)
       {
         lastSleepCheck = now;
@@ -1663,7 +1662,9 @@ void Rakieta::init()
     systemSleep(200);
   }
   
-  if (currentMode != SLEEP) setOffsets();
+  if (currentMode != SystemMode::SLEEP) setOffsets();
+
+  initWatchdog();
 
   Serial.println("\n=== INICJALIZACJA ZAKOŃCZONA ===\n");
 }
@@ -1672,22 +1673,11 @@ void Rakieta::loop()
 {
   uint32_t now = millis();
   
-  handleModes(now);
-
+  updateState(now);
   updateLeds(now);
   updateBuzzer(now);
   updateSolenoid(now);
 
+  watchdog();
   systemSleep(5);
 }
-
-
-
-
-
-
-
-
-
-
-
