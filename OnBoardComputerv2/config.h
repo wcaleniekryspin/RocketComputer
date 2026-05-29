@@ -77,16 +77,16 @@ constexpr int TX_MAX            = PB_11;
 // ============================================================
 // ERROR CODES
 // ============================================================
-constexpr LORA_ERROR                         = BV16(0);
-constexpr LSM_ERROR                          = BV16(1);
-constexpr BMP1_ERROR                         = BV16(2);
-constexpr BMP2_ERROR                         = BV16(3);
-constexpr ADXL_ERROR                         = BV16(4);
-constexpr GPS_ERROR                          = BV16(5);
-constexpr FLASH_ERROR                        = BV16(6);
-constexpr FLASH_FILE_ERROR                   = BV16(7);
-constexpr FLASH_NULL_MSG_ERROR               = BV16(8);
-constexpr MSG_TOO_LONG_ERROR                 = BV16(9);
+constexpr uint16_t LORA_ERROR                         = BV16(0);
+constexpr uint16_t LSM_ERROR                          = BV16(1);
+constexpr uint16_t BMP1_ERROR                         = BV16(2);
+constexpr uint16_t BMP2_ERROR                         = BV16(3);
+constexpr uint16_t ADXL_ERROR                         = BV16(4);
+constexpr uint16_t GPS_ERROR                          = BV16(5);
+constexpr uint16_t FLASH_ERROR                        = BV16(6);
+constexpr uint16_t FLASH_FILE_ERROR                   = BV16(7);
+constexpr uint16_t FLASH_NULL_MSG_ERROR               = BV16(8);
+constexpr uint16_t MSG_TOO_LONG_ERROR                 = BV16(9);
 
 // ============================================================
 // KONFIGURACJA LORA
@@ -102,6 +102,7 @@ constexpr uint16_t LORA_TX_TIMEOUT         = 500;      // ms
 // ============================================================
 // KONFIGURACJA CZUJNIKÓW I OBLICZEŃ
 // ============================================================
+constexpr uint16_t LED_DELAY                       = 100;    // ms
 constexpr uint16_t SOLENOID_DELAY                  = 100;    // ms
 
 constexpr float FUSION_ALPHA                       = 0.8f;
@@ -142,7 +143,7 @@ constexpr uint32_t LAUNCH_DEBOUNCE_MS             = 75;        // ms
 constexpr float BURNOUT_ACCEL_THRESHOLD           = 5.0f;      // <0.5G
 constexpr uint32_t BURNOUT_DEBOUNCE_MS            = 300;       // ms
 
-constexpr float APOGEE_VELOCITY_THRESHOLD         = 1.0f;      // m/s
+constexpr float APOGEE_VELOCITY_THRESHOLD         = 5.0f;      // m/s
 constexpr uint32_t APOGEE_DEBOUNCE_MS             = 500;       // ms
 
 constexpr float LANDING_VELOCITY_THRESHOLD        = 1.0f;      // m/s
@@ -161,9 +162,6 @@ constexpr uint32_t DROGUE_PARASHUTE_TIMEOUT       = 20000;     // ms
 constexpr float DEPLOY_MAIN_MAX_SPEED             = 30.0f;     // m/s
 constexpr float DEPLOY_MAIN_MIN_ALTITUDE          = 200.0f;    // metry
 constexpr uint32_t MAIN_PARASHUTE_TIMEOUT         = 30000;     // ms
-
-// Czas otwarcia elektrozaworu
-constexpr uint32_t SOLENOID_DELAY                 = 300;       //ms
 
 // ============================================================
 // INTERWAŁY CZASOWE
@@ -194,12 +192,14 @@ constexpr uint16_t MAX_FILE_NUMBER        = 9999;
 
 
 
-
-static_assert(SF >= 6 && SF <= 12, "LoRa Spreading Factor must be between 6 and 12");
-static_assert(CODING_RATE >= 5 && CODING_RATE <= 8, "LoRa Coding Rate must be 5,6,7,8 (4/5 to 4/8)");
-static_assert(POWER <= 22, "LoRa power cannot exceed 22 dBm for SX1262");
-static_assert(FLUSH_AFTER_WRITES > 0, "FLUSH_AFTER_WRITES must be positive");
-
+static_assert(MIN_PRESSURE < MAX_PRESSURE, "MIN_PRESSURE must be less than MAX_PRESSURE");
+static_assert(MIN_ALTITUDE < MAX_ALTITUDE, "MIN_ALTITUDE must be less than MAX_ALTITUDE");
+static_assert(MIN_TEMP < MAX_TEMP, "MIN_TEMP must be less than MAX_TEMP");
+static_assert(LAUNCH_ACCEL_THRESHOLD > 0.0f, "LAUNCH_ACCEL_THRESHOLD must be positive");
+static_assert(BURNOUT_ACCEL_THRESHOLD > 0.0f, "BURNOUT_ACCEL_THRESHOLD must be positive");
+static_assert(APOGEE_VELOCITY_THRESHOLD > 0.0f, "APOGEE_VELOCITY_THRESHOLD must be positive");
+static_assert(LANDING_VELOCITY_THRESHOLD > 0.0f, "LANDING_VELOCITY_THRESHOLD must be positive");
+static_assert(INTERVAL_FLIGHT > 0, "INTERVAL_FLIGHT must be positive");
 
 
 
@@ -268,7 +268,7 @@ constexpr uint16_t adxlAccelZLen                      = (15+1);
 constexpr uint16_t adxlSpeedPos                       = (adxlAccelZPos + adxlAccelZLen);
 constexpr uint16_t adxlSpeedLen                       = (14+1);
 
-constexpr uint16_t bmp1TempPos                         (adxlSpeedPos + adxlSpeedLen);
+constexpr uint16_t bmp1TempPos                        = (adxlSpeedPos + adxlSpeedLen);
 constexpr uint16_t bmp1TempLen                        = (9+1);
 constexpr uint16_t bmp1PressPos                       = (bmp1TempPos + bmp1TempLen);
 constexpr uint16_t bmp1PressLen                       = 14;

@@ -26,76 +26,6 @@
 */
 
 
-/* kolejność:
-  systemReset                     w loraHandleCommand
-  systemSleep                     w loraHandleCommand, handleSleepMode
-  setSystemMode                   w init
-  printSystemMode                 w 
-  printFlightMode                 w 
-
-  readBatteryVoltage              w readSensorData
-  readGpsData                     w readSensorData
-  readLsmData                     w readSensorData
-  readAdxlData                    w readSensorData
-  readBmpData                     w readSensorData
-  readSensorData                  w superloop
-  filterAcceleration              po readSensorData
-  filterGyro                      po readSensorData
-  filterLowPass  | float filterLowPass(float raw, float prev, float alpha) { return alpha * raw + (1 - alpha) * prev; }
-
-  calculateAltitude               po readSensorData
-  calculateOrientation            po readSensorData
-  calculateVerticalVelocity       po calculateAltitude
-  fuseBMPAndIMU                   po filtrach    | fusedAltitude = alpha * (bmpAltitude) + (1 - alpha) * (prevFused + verticalAccel * dt)
-  kalmanFilter                    po fuseBMPAndIMU
-
-  loraInit                        w setup
-  loraPrintStatus                 w setup
-  loraPrepareMsg                  w loraSendPacket
-  loraSendString                  w 
-  loraSendPacket                  w handleFlightMode
-  loraStartListening              w superloop
-  loraSendGpsOffset               w loraHandleCommand
-  loraHandleCommand               w loraCheckRadio
-  loraCheckRadio                  w superloop
-
-  flashInit                       w init
-  flashFindNextFileNumber         po flashInit
-  flashOpenNewFile                w handleFlightMode
-  flashWriteData                  w superloop
-  flashWriteRocketData            w superloop
-  flashFlushBuffer                przed resetem i co jakiś czas
-  flashCloseFile                  po  =======  taczdałn
-  flashRecoverAfterReset          podczas boot
-  flashDumpFileList               w handleDumpMode
-  flashDumpFileData               w handleDumpMode
-  flashDumpLastFile               w handleDumpMode
-
-  ? checkDeploymentConditions    w detectApogee
-  drogueParashuteOpen             w detectApogee
-  mainParashuteOpen               w descent
-  detectLaunch                    w updateFlightState
-  detectBurnout                   w updateFlightState
-  detectApogee                    w updateFlightState
-  detectLanding                   w updateFlightState
-  updateFlightState               w superloop
-
-  watchdog                        w superloop
-  updateBuzzer                    w superloop
-  updateStatus                    w superloop
-  updateSolenoid                  w superloop
-  setOffsets                      w init
-  prepareOffsetsMsg               w loraHandleComand
-
-  handleDebugMode                 w superloop
-  handleFlightMode                w superloop
-  handleDumpMode                  w superloop
-  handleSleepMode                 w superloop
-
-  systemInit
-  systemLoop
-*/
-
 
 class Rakieta
 {
@@ -286,15 +216,15 @@ private:
   bool initBMP2();
   bool initGPS();
 
-  void updateLeds(const uint32_t now);
-  void updateBuzzer(const uint32_t now);
-  void updateSolenoid(const uint32_t now);
+  void updateLeds(const uint32_t);
+  void updateBuzzer(const uint32_t);
+  void updateSolenoid(const uint32_t);
 
   void systemReset();
-  void systemSleep(const uint32_t time);
+  void systemSleep(const uint32_t);
   void setSystemMode();
-  void printSystemMode();
-  void printFlightMode();  /// prawdopodobnie do usunięcia bo nigdzie nie będzie używane
+  void printSystemMode() const;
+  void printFlightMode() const;
 
   void handleBattery();  // tzreba sprawdzić czy odpowiednie są przeliczniki
   void handleLsm();
@@ -302,10 +232,10 @@ private:
   void handleBmp();
   void handleGPS();
   void readSensorsData();
-  void printData();
+  void printData() const;
   void setOffsets();
-  void prepareOffsetsMsg(char* buffer, size_t bufferSize);
-  void prepareDataLineMsg(char* buffer, size_t bufferSize);
+  void prepareOffsetsMsg(char*, size_t);
+  void prepareDataLineMsg(char*, size_t);
   void filterAcceleration();  /// nigdzie nie używane
   void filterGyro();  /// nigdzie nie używane
   void calculateOrientation();  /// nigdzie nie używane
@@ -313,32 +243,32 @@ private:
 
   bool initLora();
   static void setOperationFlag();
-  void prepareLoraStatusMsg(char* buffer, size_t bufferSize);
+  void prepareLoraStatusMsg(char*, size_t);
   void preparePacket();
   void sendPacket();
-  void transmit(const uint8_t* msg, const size_t len);
-  void transmit(const char* msg, size_t len);
+  void transmit(const uint8_t*, const size_t);
+  void transmit(const char*, size_t);
   void startListening();
   void handleCommand(const char* command);
   void checkRadio();
   void sendGpsOffset();
 
   bool initFlash();
-  bool flashFindNextFileNumber(char* fileName, size_t bufferSize);
+  bool flashFindNextFileNumber(char*, size_t);
   bool flashOpenNewFile();
-  void flashWriteString(const char* msg);
+  void flashWriteString(const char*);
   void flashFlushBuffer();
   void flashCloseFile();
   bool flashRecoverAfterReset();
   void flashDumpFileList();
-  void flashDumpFileData(const uint16_t fileNumber);
+  void flashDumpFileData(const uint16_t);
   void flashDumpLastFile();
 
   bool detectLaunch();
   bool detectBurnout();
   bool detectApogee();
   bool detectLanding();
-  bool checkDeploymentConditions(const ParachuteType type);
+  bool checkDeploymentConditions(const ParachuteType);
 
   void sendFlightSummary();
   void drogueParashuteOpen();
@@ -347,14 +277,14 @@ private:
 
   void initWatchdog();
   void watchdog();
-  void reinitComponent(bool (*initFunc)());  // helper do reinicjalizacji
-  void handleErrors();                           // główna funkcja obsługi błędów
+  void reinitComponent(bool (Rakieta::*initFunc)());
+  void handleErrors();
 
   void handleDebugMode();  /// do zmieniania w locie
   void handleFlightMode();
   void handleDumpMode();  /// nie wiem co tu się dzieje obecnie
   void handleSleepMode();  /// chyba będzie ok
-  void handleModes(const uint32_t now);
+  void handleMode(const uint32_t);
 
 
 public:
