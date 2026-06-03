@@ -1,7 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define SERIAL_DEBUG    1
+#define SERIAL_DEBUG    0
 #if SERIAL_DEBUG == 1
   #define debugInit(x)  Serial.begin(x)
   #define debug(x)      Serial.print(x)
@@ -21,58 +21,57 @@
 #define BV16(x)         (uint16_t(1u) << (x))
 
 
-
 // ============================================================
 // PINY GPIO
 // ============================================================
-constexpr int LED_1             = PE_5;                      // info
-constexpr int LED_2             = PE_6;                      // do errorów
-constexpr int BUZZER            = PE_15;
-constexpr int SOLENOID_1        = PE_7;
-constexpr int SOLENOID_2        = PB_1;
-constexpr int BATTERY           = PC_0;
+constexpr uint16_t LED_1             = PE_5;                      // info
+constexpr uint16_t LED_2             = PE_6;                      // do errorów
+constexpr uint16_t BUZZER            = PE_15;
+constexpr uint16_t SOLENOID_1        = PE_7;
+constexpr uint16_t SOLENOID_2        = PB_1;
+constexpr uint16_t BATTERY           = PC_0;
 
 // Piny DIP switch (wejścia)
-constexpr int MODE1             = PD_13;
-constexpr int MODE2             = PD_12;
-constexpr int MODE3             = PD_11;
-constexpr int MODE4             = PD_10;
+constexpr uint16_t MODE1             = PD_13;
+constexpr uint16_t MODE2             = PD_12;
+constexpr uint16_t MODE3             = PD_11;
+constexpr uint16_t MODE4             = PD_10;
 
 // ============================================================
 // PINY SPI
 // ============================================================
 
 // Definicje pinów SPI4
-constexpr int SPI4_SCK          = PE_12;
-constexpr int SPI4_MISO         = PE_13;
-constexpr int SPI4_MOSI         = PE_14;
+constexpr uint16_t SPI4_SCK          = PE_12;
+constexpr uint16_t SPI4_MISO         = PE_13;
+constexpr uint16_t SPI4_MOSI         = PE_14;
 
 // Piny CS dla urządzeń na SPI4
-constexpr int CS_BMP2           = PE_8;
-constexpr int CS_BMP1           = PE_9;
-constexpr int CS_ADXL           = PE_10;
-constexpr int CS_LSM            = PE_11;
+constexpr uint16_t CS_BMP2           = PE_8;
+constexpr uint16_t CS_BMP1           = PE_9;
+constexpr uint16_t CS_ADXL           = PE_10;
+constexpr uint16_t CS_LSM            = PE_11;
 
 // SPI1 (Flash)
-constexpr int CS_FLASH          = PA_4;
-constexpr int SPI1_SCK          = PA_5;
-constexpr int SPI1_MISO         = PA_6;
-constexpr int SPI1_MOSI         = PA_7;
+constexpr uint16_t CS_FLASH          = PA_4;
+constexpr uint16_t SPI1_SCK          = PA_5;
+constexpr uint16_t SPI1_MISO         = PA_6;
+constexpr uint16_t SPI1_MOSI         = PA_7;
 
 // SPI3 (LoRa)
-constexpr int SPI_LORA_SCK      = PC_10;
-constexpr int SPI_LORA_MISO     = PC_11;
-constexpr int SPI_LORA_MOSI     = PC_12;
-constexpr int BUSY_LORA         = PD_0;
-constexpr int CS_LORA           = PD_3;
-constexpr int RST_LORA          = -1;      // brak podłączenia
-constexpr int DIO1_LORA         = -1;      // brak podłączenia
+constexpr uint16_t SPI_LORA_SCK      = PC_10;
+constexpr uint16_t SPI_LORA_MISO     = PC_11;
+constexpr uint16_t SPI_LORA_MOSI     = PC_12;
+constexpr uint16_t BUSY_LORA         = PD_0;
+constexpr uint16_t CS_LORA           = PD_3;
+constexpr uint16_t RST_LORA          = -1;      // brak podłączenia
+constexpr uint16_t DIO1_LORA         = -1;      // brak podłączenia
 
 // ============================================================
 // UART (GPS)
 // ============================================================
-constexpr int RX_MAX            = PB_10;
-constexpr int TX_MAX            = PB_11;
+constexpr uint16_t RX_MAX            = PB_10;
+constexpr uint16_t TX_MAX            = PB_11;
 
 // ============================================================
 // ERROR CODES
@@ -98,6 +97,9 @@ constexpr uint8_t CODING_RATE              = 5;        // 5-8
 constexpr uint8_t POWER                    = 20;       // dBm (do 17-22 dBm)
 constexpr uint8_t PREAMBLE_LENGTH          = 10;       // 6-30 symbols, the longer the symbols, the better the synchronization and range?, but the slower the transmission.
 constexpr uint16_t LORA_TX_TIMEOUT         = 500;      // ms
+
+#define ARRAY_SIZE                          100
+#define HEADER                              (0xFF66)
 
 // ============================================================
 // KONFIGURACJA CZUJNIKÓW I OBLICZEŃ
@@ -129,10 +131,31 @@ constexpr float MAX_SPEED                          = 2000.0f;
 constexpr float MIN_TEMP                           = -20.0f;
 constexpr float MAX_TEMP                           = 60.0f;
 
+// Dla akcelerometrów
+constexpr float LSM_REDUCE_START                   = 117.7f;   // over 12G
+constexpr float LSM_MAX_G                          = 149.1f;   // 95% of the maximum reading - 15.2G
+constexpr float ADXL_MAX_G                         = 1863.9f;  // 95% of the maximum reading - 190G
 
+// Dla fuzji prędkości i wysokości
+constexpr float MACH_IGNORE_GPS                    = 0.5f;   // powyżej 0.5 Ma nie ufaj GPS
+constexpr float MACH_IGNORE_BARO                   = 0.9f;   // powyżej 0.9 Ma nie ufaj barometrom
+constexpr float SPEED_OF_SOUND                     = 340.0f; // m/s (na poziomie morza)
 
+// Wagi dla przyśpieszenia
+constexpr float WEIGHT_LSM_ACCEL                   = 0.7f;
+constexpr float WEIGHT_ADXL_ACCEL                  = 0.5f;
 
+// Wagi dla prędkości
+constexpr float WEIGHT_BMP_SPEED                   = 0.5f;
+constexpr float WEIGHT_LSM_SPEED                   = 0.3f;
+constexpr float WEIGHT_ADXL_SPEED                  = 0.2f;
+constexpr float WEIGHT_GPS_SPEED                   = 0.1f;
 
+// Wagi dla wysokości
+constexpr float WEIGHT_BMP_ALTI                    = 0.5f;
+constexpr float WEIGHT_LSM_ALTI                    = 0.3f;
+constexpr float WEIGHT_ADXL_ALTI                   = 0.1f;
+constexpr float WEIGHT_GPS_ALTI                    = 0.1f;
 
 // ============================================================
 // DETEKCJA FAZ LOTU (wartości progowe)
@@ -180,13 +203,24 @@ constexpr uint32_t INTERVAL_RISING                    = 50;
 constexpr uint32_t INTERVAL_FALLING                   = 100;
 constexpr uint32_t INTERVAL_TOUCHDOWN                 = 10000;
 
+// Offsets
+constexpr uint32_t OFFSET_SENSORS_INTERVAL   = 25;
+constexpr uint32_t OFFSET_GPS_INTERVAL       = 250;
+
+// Watchdog
+constexpr uint32_t WATCHDOG_INTERVAL         = 100;
+
 // ============================================================
 // KONFIGURACJA FLASH (W25Q128)
 // ============================================================
-constexpr uint16_t FLUSH_AFTER_WRITES     = 10;
+constexpr uint16_t FLUSH_AFTER_WRITES        = 10;
 
-constexpr uint16_t GPS_BAUNDRATE          = 9600;
-constexpr uint16_t MAX_FILE_NUMBER        = 9999;
+
+
+constexpr uint16_t GPS_BAUNDRATE             = 9600;
+constexpr uint16_t MAX_FILE_NUMBER           = 9999;
+constexpr float APOGEE_ALTITUDE_HYSTERESIS   = 1.0f;
+
 
 
 

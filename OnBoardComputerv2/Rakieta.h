@@ -3,6 +3,8 @@
 
 #include <sys/_stdint.h>
 #include <stdlib.h>
+#include <cstring>
+#include <cstdio>
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -110,6 +112,7 @@ private:
       float ax;
       float ay;
       float az;
+      float lastTotalAlti;
       float lastTotalSpeed;
       float lastTotalAccel;
       uint32_t lastTime;
@@ -127,9 +130,18 @@ private:
       float voltage;
     } battery;
     struct {
+      float ax;
+      float ay;
+      float az;
+      float gx;
+      float gy;
+      float gz;
+      float accel;
+      float speed;
+      float alti;
       float roll;
       float pitch;
-    } orientation;
+    } filtered;
   } data;
 
   // === Operacyjne ===
@@ -150,18 +162,7 @@ private:
   bool solenoid2IsOn;
   uint32_t solenoid2OffTime;
 
-  // === Dane przefiltrowane ===
-  float filteredAccelX;
-  float filteredAccelY;
-  float filteredAccelZ;
-  float filteredGyroX;
-  float filteredGyroY;
-  float filteredGyroZ;
-  float fusedAltitude;
-  float prevFusedAltitude;
-
   // Czasy dla detekcji
-  bool inFlight;
   uint32_t launchDetectTime;
   uint32_t burnoutDetectTime;
   uint32_t apogeeDetectTime;
@@ -184,8 +185,8 @@ private:
   // === LoRa ===
   static volatile bool operationDone;
   uint32_t packet;
-  uint32_t loraMsgStartTime;
   SPISettings loraSettings;
+  Module loraModule;
   SX1262 lora;
   BitStorage message;
 
@@ -200,11 +201,6 @@ private:
   FatVolume fatfs;
 
   // === Zarządzanie czasem ===
-  uint32_t lastErrorCheckTime;
-  uint32_t lastFlightLoop;
-  uint32_t lastDebugPrint;
-  uint32_t lastDumpProgress;
-  uint32_t lastSleepCheck;
   uint32_t lastFlightModeLoop;
 
 
@@ -229,17 +225,19 @@ private:
   void handleBattery();  // tzreba sprawdzić czy odpowiednie są przeliczniki
   void handleLsm();
   void handleAdxl();
-  void handleBmp();
+  void handleBmp1();
+  void handleBmp2();
   void handleGPS();
   void readSensorsData();
   void printData() const;
   void setOffsets();
   void prepareOffsetsMsg(char*, size_t);
   void prepareDataLineMsg(char*, size_t);
-  void filterAcceleration();  /// nigdzie nie używane
-  void filterGyro();  /// nigdzie nie używane
-  void calculateOrientation();  /// nigdzie nie używane
-  void fuseBMPAndIMU();  /// nigdzie nie używane
+  void filterGyro();
+  void calculateOrientation();
+  void filterAcceleration();
+  void filterSpeed();
+  void filterAlti();
 
   bool initLora();
   static void setOperationFlag();
