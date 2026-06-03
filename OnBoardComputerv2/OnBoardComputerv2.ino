@@ -9,6 +9,8 @@ void setup()
   uint32_t start = millis();
   while (!Serial && (millis() - start < 3000)) delay(10);
 
+  Wire.begin();
+
   rakieta.init();
 }
 

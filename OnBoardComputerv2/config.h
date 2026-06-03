@@ -1,7 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define SERIAL_DEBUG    0
+#define SERIAL_DEBUG    1
 #if SERIAL_DEBUG == 1
   #define debugInit(x)  Serial.begin(x)
   #define debug(x)      Serial.print(x)
@@ -108,7 +108,7 @@ constexpr uint16_t LED_DELAY                       = 100;    // ms
 constexpr uint16_t SOLENOID_DELAY                  = 100;    // ms
 
 constexpr float FUSION_ALPHA                       = 0.8f;
-constexpr float ADXL375_MG2G_MULTIPLIER            = 0.049f;  // trzeba sprawdzić czy to dodać → / ADXL343_MG2G_MULTIPLIER)
+constexpr float ADXL375_MG2G_MULTIPLIER            = 0.049f;  /// chyba trzeba będzie trzeba zmienić wartość na 12,5
 constexpr float REFERENCE_PRESSURE_HPA             = 1013.25f;
 
 constexpr uint8_t OFFSETS_SENSORS_READ             = 50;
@@ -214,7 +214,6 @@ constexpr uint32_t WATCHDOG_INTERVAL         = 100;
 // KONFIGURACJA FLASH (W25Q128)
 // ============================================================
 constexpr uint16_t FLUSH_AFTER_WRITES        = 10;
-
 
 
 constexpr uint16_t GPS_BAUNDRATE             = 9600;

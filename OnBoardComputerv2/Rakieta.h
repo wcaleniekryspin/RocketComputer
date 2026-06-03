@@ -139,6 +139,7 @@ private:
       float accel;
       float speed;
       float alti;
+      float maxAlti;
       float roll;
       float pitch;
     } filtered;
