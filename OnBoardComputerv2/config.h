@@ -84,8 +84,7 @@ constexpr uint16_t ADXL_ERROR                         = BV16(4);
 constexpr uint16_t GPS_ERROR                          = BV16(5);
 constexpr uint16_t FLASH_ERROR                        = BV16(6);
 constexpr uint16_t FLASH_FILE_ERROR                   = BV16(7);
-constexpr uint16_t FLASH_NULL_MSG_ERROR               = BV16(8);
-constexpr uint16_t MSG_TOO_LONG_ERROR                 = BV16(9);
+constexpr uint16_t MSG_TOO_LONG_ERROR                 = BV16(8);
 
 // ============================================================
 // KONFIGURACJA LORA
@@ -98,7 +97,7 @@ constexpr uint8_t POWER                    = 20;       // dBm (do 17-22 dBm)
 constexpr uint8_t PREAMBLE_LENGTH          = 10;       // 6-30 symbols, the longer the symbols, the better the synchronization and range?, but the slower the transmission.
 constexpr uint16_t LORA_TX_TIMEOUT         = 500;      // ms
 
-#define ARRAY_SIZE                          100
+#define ARRAY_SIZE                          90
 #define HEADER                              (0xFF66)
 
 // ============================================================
@@ -132,7 +131,8 @@ constexpr float MIN_TEMP                           = -20.0f;
 constexpr float MAX_TEMP                           = 60.0f;
 
 // Dla akcelerometrów
-constexpr float LSM_REDUCE_START                   = 117.7f;   // over 12G
+constexpr float LSM_REDUCE_WAGE                    = 117.7f;   // over 12G
+constexpr float LSM_REDUCE_FACTOR                  = 0.5f;
 constexpr float LSM_MAX_G                          = 149.1f;   // 95% of the maximum reading - 15.2G
 constexpr float ADXL_MAX_G                         = 1863.9f;  // 95% of the maximum reading - 190G
 
@@ -197,10 +197,7 @@ constexpr uint32_t INTERVAL_DUMP                  = 500;       // ms
 constexpr uint32_t INTERVAL_SLEEP                 = 5000;      // ms
 
 // Flight Status
-constexpr uint32_t INTERVAL_IDLE                      = 1000;
 constexpr uint32_t INTERVAL_BURN                      = 50;
-constexpr uint32_t INTERVAL_RISING                    = 50;
-constexpr uint32_t INTERVAL_FALLING                   = 100;
 constexpr uint32_t INTERVAL_TOUCHDOWN                 = 10000;
 
 // Offsets
@@ -248,16 +245,16 @@ constexpr uint16_t packetLen                          = 16;
 constexpr uint16_t errorPos                           = (packetPos + packetLen);
 constexpr uint16_t errorLen                           = 16;
 constexpr uint16_t statusPos                          = (errorPos + errorLen);
-constexpr uint16_t statusLen                          = 4;
-constexpr uint16_t handlePos                          = (statusPos + statusLen);
-constexpr uint16_t handleLen                          = 1;
+constexpr uint16_t statusLen                          = 3;
+constexpr uint16_t flightstatusPos                    = (statusPos + statusLen);
+constexpr uint16_t flightstatusLen                    = 3;
 
-constexpr uint16_t gpsLatPos                          = (handlePos + handleLen);
+constexpr uint16_t gpsLatPos                          = (flightstatusPos + flightstatusLen);
 constexpr uint16_t gpsLatLen                          = (17+1);
 constexpr uint16_t gpsLngPos                          = (gpsLatPos + gpsLatLen);
 constexpr uint16_t gpsLngLen                          = (17+1);
 constexpr uint16_t gpsAltiPos                         = (gpsLngPos + gpsLngLen);
-constexpr uint16_t gpsAltiLen                         = 14;
+constexpr uint16_t gpsAltiLen                         = (16+1);
 constexpr uint16_t gpsHourPos                         = (gpsAltiPos + gpsAltiLen);
 constexpr uint16_t gpsHourLen                         = 5;
 constexpr uint16_t gpsMinPos                          = (gpsHourPos + gpsHourLen);
@@ -271,7 +268,7 @@ constexpr uint16_t gpsSpeedLen                        = (14+1);
 constexpr uint16_t gpsCoursePos                       = (gpsSpeedPos + gpsSpeedLen);
 constexpr uint16_t gpsCourseLen                       = 9;
 constexpr uint16_t gpsSatNumPos                       = (gpsCoursePos + gpsCourseLen);
-constexpr uint16_t gpsSatNumLen                       = 3;
+constexpr uint16_t gpsSatNumLen                       = 5;
 constexpr uint16_t gpsHdopPos                         = (gpsSatNumPos + gpsSatNumLen);
 constexpr uint16_t gpsHdopLen                         = 5;
 
@@ -289,39 +286,69 @@ constexpr uint16_t lsmGyroZPos                        = (lsmGyroYPos + lsmGyroYL
 constexpr uint16_t lsmGyroZLen                        = (14+1);
 constexpr uint16_t lsmTempPos                         = (lsmGyroZPos + lsmGyroZLen);
 constexpr uint16_t lsmTempLen                         = (9+1);
-constexpr uint16_t lsmSpeedPos                        = (lsmTempPos + lsmTempLen);
-constexpr uint16_t lsmSpeedLen                        = (10+1);
+constexpr uint16_t lsmAltiPos                         = (lsmTempPos + lsmTempLen);
+constexpr uint16_t lsmAltiLen                         = (16+1);
+constexpr uint16_t lsmSpeedPos                        = (lsmAltiPos + lsmAltiLen);
+constexpr uint16_t lsmSpeedLen                        = (14+1);
+constexpr uint16_t lsmAccelPos                        = (lsmSpeedPos + lsmSpeedLen);
+constexpr uint16_t lsmAccelLen                        = (12+1);
 
-constexpr uint16_t adxlAccelXPos                      = (lsmSpeedPos + lsmSpeedLen);
+constexpr uint16_t adxlAccelXPos                      = (lsmAccelPos + lsmAccelLen);
 constexpr uint16_t adxlAccelXLen                      = (15+1);
 constexpr uint16_t adxlAccelYPos                      = (adxlAccelXPos + adxlAccelXLen);
 constexpr uint16_t adxlAccelYLen                      = (15+1);
 constexpr uint16_t adxlAccelZPos                      = (adxlAccelYPos + adxlAccelYLen);
 constexpr uint16_t adxlAccelZLen                      = (15+1);
-constexpr uint16_t adxlSpeedPos                       = (adxlAccelZPos + adxlAccelZLen);
+constexpr uint16_t adxlAltiPos                        = (adxlAccelZPos + adxlAccelZLen);
+constexpr uint16_t adxlAltiLen                        = (16+1);
+constexpr uint16_t adxlSpeedPos                       = (adxlAltiPos + adxlAltiLen);
 constexpr uint16_t adxlSpeedLen                       = (14+1);
+constexpr uint16_t adxlAccelPos                       = (adxlSpeedPos + adxlSpeedLen);
+constexpr uint16_t adxlAccelLen                       = (15+1);
 
-constexpr uint16_t bmp1TempPos                        = (adxlSpeedPos + adxlSpeedLen);
+constexpr uint16_t bmp1TempPos                        = (adxlAccelPos + adxlAccelLen);
 constexpr uint16_t bmp1TempLen                        = (9+1);
 constexpr uint16_t bmp1PressPos                       = (bmp1TempPos + bmp1TempLen);
-constexpr uint16_t bmp1PressLen                       = 14;
+constexpr uint16_t bmp1PressLen                       = 11;
 constexpr uint16_t bmp1AltiPos                        = (bmp1PressPos + bmp1PressLen);
-constexpr uint16_t bmp1AltiLen                        = 14;
+constexpr uint16_t bmp1AltiLen                        = (16+1);
 constexpr uint16_t bmp1SpeedPos                       = (bmp1AltiPos + bmp1AltiLen);
 constexpr uint16_t bmp1SpeedLen                       = (14+1);
 
 constexpr uint16_t bmp2TempPos                        = (bmp1SpeedPos + bmp1SpeedLen);
 constexpr uint16_t bmp2TempLen                        = (9+1);
 constexpr uint16_t bmp2PressPos                       = (bmp2TempPos + bmp2TempLen);
-constexpr uint16_t bmp2PressLen                       = 14;
+constexpr uint16_t bmp2PressLen                       = 11;
 constexpr uint16_t bmp2AltiPos                        = (bmp2PressPos + bmp2PressLen);
-constexpr uint16_t bmp2AltiLen                        = 14;
+constexpr uint16_t bmp2AltiLen                        = (16+1);
 constexpr uint16_t bmp2SpeedPos                       = (bmp2AltiPos + bmp2AltiLen);
 constexpr uint16_t bmp2SpeedLen                       = (14+1);
 
 constexpr uint16_t batteryPos                         = (bmp2SpeedPos + bmp2SpeedLen);
-constexpr uint16_t batteryLen                         = 7;
+constexpr uint16_t batteryLen                         = 6;
 
+constexpr uint16_t filteredAccelXPos                  = (batteryPos + batteryLen);
+constexpr uint16_t filteredAccelXLen                  = (15+1);
+constexpr uint16_t filteredAccelYPos                  = (filteredAccelXPos + filteredAccelXLen);
+constexpr uint16_t filteredAccelYLen                  = (15+1);
+constexpr uint16_t filteredAccelZPos                  = (filteredAccelYPos + filteredAccelYLen);
+constexpr uint16_t filteredAccelZLen                  = (15+1);
+constexpr uint16_t filteredGyroXPos                   = (filteredAccelZPos + filteredAccelZLen);
+constexpr uint16_t filteredGyroXLen                   = (14+1);
+constexpr uint16_t filteredGyroYPos                   = (filteredGyroXPos + filteredGyroXLen);
+constexpr uint16_t filteredGyroYLen                   = (14+1);
+constexpr uint16_t filteredGyroZPos                   = (filteredGyroYPos + filteredGyroYLen);
+constexpr uint16_t filteredGyroZLen                   = (14+1);
+constexpr uint16_t filteredAltiPos                    = (filteredGyroZPos + filteredGyroZLen);
+constexpr uint16_t filteredAltiLen                    = (16+1);
+constexpr uint16_t filteredSpeedPos                   = (filteredAltiPos + filteredAltiLen);
+constexpr uint16_t filteredSpeedLen                   = (14+1);
+constexpr uint16_t filteredAccelPos                   = (filteredSpeedPos + filteredSpeedLen);
+constexpr uint16_t filteredAccelLen                   = (15+1);
+constexpr uint16_t filteredRollPos                    = (filteredAccelPos + filteredAccelLen);
+constexpr uint16_t filteredRollLen                    = 8;
+constexpr uint16_t filteredPitchPos                   = (filteredRollPos + filteredRollLen);
+constexpr uint16_t filteredPitchLen                   = 8;
 // CHECKSUM for 8 bits
 
 #endif  // CONFIG_H

@@ -1,0 +1,73 @@
+START (main.ino)
+│
+├─ setup()
+│  ├─ debugInit()                         // tylko w wersji demonstracyjnej
+│  ├─ Wire.begin()
+│  └─ rakieta.init()
+│     ├─ initGPIO()
+│     ├─ initSPI()
+│     ├─ initLSM(), initADXL(), initBMP1(), initBMP2(), initGPS(), initLora(), initFlash()
+│     ├─ setSystemMode()                  // odczyt DIP switch
+│     ├─ printSystemMode()                // do logu/flash
+│     └─ (miganie LED – kod diagnostyczny)
+│
+└─ loop()
+   └─ rakieta.loop()
+      │
+      ├─ (co INTERVAL_ERROR_CHECK) → handleErrors()
+      │  ├─ for każdy komponent: if (errorFlag & component) → reinitComponent()
+      │  └─ jeśli flashFileError → flashOpenNewFile()
+      │
+      ├─ handleMode(now)   // główny dystrybutor trybów
+      │  │
+      │  ├─ [TRYB DEBUG]
+      │  │  ├─ (co INTERVAL_DEBUG)
+      │  │  ├─ handleSerialCommands()     // odczyt komend z USB
+      │  │  ├─ checkRadio()               // odbiór komend przez LoRa
+      │  │  ├─ readSensorsData()          // wszystkie sensory (bez fuzji)
+      │  │  ├─ printDataToSerial()        // lub do pliku logu
+      │  │  └─ sendPacket() (opcjonalnie)
+      │  │
+      │  ├─ [TRYB FLIGHT]
+      │  │  ├─ (co INTERVAL_FLIGHT)
+      │  │  ├─ checkRadio()               // tylko komendy awaryjne (RESET, ABORT)
+      │  │  ├─ readSensorsData()
+      │  │  ├─ filterGyro()
+      │  │  ├─ calculateOrientation()    // roll, pitch (do logu, nie do sterowania)
+      │  │  ├─ filterAcceleration()      // fuzja LSM+ADXL, oblicza data.filtered.accel
+      │  │  ├─ filterSpeed()             // fuzja BMP, LSM, ADXL, GPS
+      │  │  ├─ filterAlti()              // fuzja wysokości
+      │  │  ├─ updateFlightState()       // automat stanów lotu
+      │  │  │  ├─ detectLaunch()         // używa data.filtered.accel
+      │  │  │  ├─ detectBurnout()
+      │  │  │  ├─ detectApogee()         // używa data.filtered.speed, data.filtered.alti
+      │  │  │  ├─ detectLanding()
+      │  │  │  ├─ checkDeploymentConditions(DROGUE/MAIN)
+      │  │  │  ├─ drogueParashuteOpen() / mainParashuteOpen()
+      │  │  │  └─ sendFlightSummary() (po LANDED)
+      │  │  ├─ prepareDataLineMsg()      // CSV dla flash
+      │  │  ├─ preparePacket()           // binarny dla LoRa
+      │  │  ├─ sendPacket()              // przez LoRa (nieblokująco)
+      │  │  └─ flashWriteString()        // zapis do pliku (z buforowaniem)
+      │  │
+      │  ├─ [TRYB DUMP]
+      │  │  ├─ (co INTERVAL_DUMP)
+      │  │  ├─ checkRadio()              // komendy: LIST, DUMP <nr>, LAST, SEND <nr>
+      │  │  ├─ handleSerialCommands()
+      │  │  ├─ flashDumpFileList()       // wypisz nazwy plików
+      │  │  ├─ flashDumpFileData(nr)     // odczyt pliku i wysyłka przez LoRa/Serial
+      │  │  └─ flashDumpLastFile()
+      │  │
+      │  └─ [TRYB SLEEP]
+      │     ├─ (co INTERVAL_SLEEP)
+      │     ├─ zapisz stan przed uśpieniem (RTC, wakeup źródła)
+      │     ├─ wyłącz niepotrzebne peryferia (SPI, I2C, sensory)
+      │     ├─ HAL_SuspendTick()
+      │     ├─ __WFI() (przerwanie z RTC lub DIP switch)
+      │     └─ po wybudzeniu: reinicjalizacja sensorów i kontynuacja
+      │
+      ├─ updateLeds(now)                 // nieblokujące gaszenie
+      ├─ updateBuzzer(now)
+      ├─ updateSolenoid(now)
+      ├─ watchdog()                       // odświeżenie IWDG
+      └─ (krótkie nieblokujące opóźnienie – yield() lub delay(1) tylko w demo)

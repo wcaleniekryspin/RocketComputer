@@ -34,19 +34,19 @@ class Rakieta
 private:
   // === Zmienne stanu ===
   enum class SystemMode {
-    DEBUG,
-    FLIGHT,
-    DUMP,
-    SLEEP
+    DEBUG = 0,
+    FLIGHT = 1,
+    DUMP = 2,
+    SLEEP = 3
   } currentMode;
 
   enum class FlightState {
-    IDLE,
-    BOOST,
-    COAST,
-    APOGEE,
-    DESCENT,
-    LANDED
+    IDLE = 0,
+    BOOST = 1,
+    COAST = 2,
+    APOGEE = 3,
+    DESCENT = 4,
+    LANDED = 5
   } currentFlightState;
 
   enum class ParachuteType { DROGUE, MAIN };
@@ -105,7 +105,6 @@ private:
       float lastTotalAlti;
       float lastTotalSpeed;
       float lastTotalAccel;
-      float lastTotalRotation;
       uint32_t lastTime;
     } lsm;
     struct {
@@ -136,9 +135,9 @@ private:
       float gx;
       float gy;
       float gz;
-      float accel;
-      float speed;
       float alti;
+      float speed;
+      float accel;
       float maxAlti;
       float roll;
       float pitch;
@@ -193,7 +192,6 @@ private:
 
   // === Flash ===
   uint16_t flashWriteCount;
-  uint32_t dumpAddress;
   // String currentFileName;
   File32 flashDataFile;
   File32 dumpFile;
@@ -205,93 +203,98 @@ private:
   uint32_t lastFlightModeLoop;
 
 
-  void initGPIO();
-  void initSPI();
-  bool initLSM();
-  bool initADXL();
-  bool initBMP1();
-  bool initBMP2();
-  bool initGPS();
+  void initGPIO();  // Inicjalizacja pinów GPIO, diod, buzzerów, solenoidów, DIP switch
+  void initSPI();  // Inicjalizacja trzech magistral SPI (flash, LoRa, sensory)
+  bool initLSM();  // Inicjalizacja czujnika LSM6DS (akcelerometr + żyroskop)
+  bool initADXL();  // Inicjalizacja czujnika ADXL375 (akcelerometr)
+  bool initBMP1();  // Inicjalizacja czujnika BMP388 (BAROMETR)
+  bool initBMP2();  // Inicjalizacja czujnika BMP388 (BAROMETR)
+  bool initGPS();  // Inicjalizacja GPS przez UART
 
-  void updateLeds(const uint32_t);
-  void updateBuzzer(const uint32_t);
-  void updateSolenoid(const uint32_t);
+  void updateLeds(const uint32_t);  // Wyłącza diody po upływie czasu (nieblokujące)
+  void updateBuzzer(const uint32_t);  // Wyłącza buzzera po upływie czasu (nieblokujące)
+  void updateSolenoid(const uint32_t);  // Wyłącza solenoidu po upływie czasu (nieblokujące)
 
-  void systemReset();
-  void systemSleep(const uint32_t);
-  void setSystemMode();
-  void printSystemMode() const;
-  void printFlightMode() const;
+  void systemReset();  // Sprzętowy reset mikrokontrolera
+  void systemSleep(const uint32_t);  // Uśpienie systemu na podany czas
+  void setSystemMode();  // Odczyt stanu DIP switch i ustawienie trybu pracy (DEBUG/FLIGHT/DUMP/SLEEP)
+  void printSystemMode() const;  // Wypisanie aktualnego trybu systemowego przez Serial
+  void printFlightMode() const;  // Wypisanie aktualnego trybu lotu przez Serial
 
-  void handleBattery();  // tzreba sprawdzić czy odpowiednie są przeliczniki
-  void handleLsm();
-  void handleAdxl();
-  void handleBmp1();
-  void handleBmp2();
-  void handleGPS();
-  void readSensorsData();
-  void printData() const;
-  void setOffsets();
-  void prepareOffsetsMsg(char*, size_t);
-  void prepareDataLineMsg(char*, size_t);
-  void filterGyro();
-  void calculateOrientation();
-  void filterAcceleration();
-  void filterSpeed();
-  void filterAlti();
+  void handleBattery();  // Odczyt napięcia baterii
+  void handleLsm();  // Odczyt i walidacja danych z LSM6DS
+  void handleAdxl();  // Odczyt i walidacja danych z ADXL375
+  void handleBmp1();  // Odczyt i walidacja danych z BMP388
+  void handleBmp2();  // Odczyt i walidacja danych z BMP388
+  void handleGPS();  // Odczyt i parsowanie danych z GPS
+  void readSensorsData();  // Zbiorczy odczyt wszystkich sensorów
 
-  bool initLora();
-  static void setOperationFlag();
-  void prepareLoraStatusMsg(char*, size_t);
-  void preparePacket();
-  void sendPacket();
-  void transmit(const uint8_t*, const size_t);
-  void transmit(const char*, size_t);
-  void startListening();
-  void handleCommand(const char* command);
-  void checkRadio();
-  void sendGpsOffset();
+  void printData() const;  // Wypisanie wszystkich danych przez Serial
+  void resetOffsets();  // Resetowanie offsetów dla sensorów i GPS
+  void setOffsets();  // Wyznaczenie offsetów dla sensorów i GPS
+  void prepareGpsOffset(char* buffer, size_t bufferSize);  // Przygotowanie komunikatu z offsetami GPS
+  void prepareOffsetsMsg(char*, size_t);  // Przygotowanie komunikatu z offsetami
+  void prepareDataLineMsg(char*, size_t);  // Przygotowanie linii danych telemetrycznych (CSV) do zapisu/flash/LoRa
+  void filterGyro();  // Filtracja dolnoprzepustowa danych z żyroskopu
+  void calculateOrientation();  // Obliczenie kąta nachylenia (pitch) i przechylenia (roll) z przefiltrowanego przyspieszenia
+  void filterAccel();  // Fuzja danych akcelerometrów z LSM i ADXL
+  void filterSpeed();  // Fuzja prędkości z BMP, LSM, ADXL i GPS
+  void filterAlti();  // Fuzja wysokości z BMP, LSM, ADXL i GPS
 
-  bool initFlash();
-  bool flashFindNextFileNumber(char*, size_t);
-  bool flashOpenNewFile();
-  void flashWriteString(const char*);
-  void flashFlushBuffer();
-  void flashCloseFile();
-  bool flashRecoverAfterReset();
-  void flashDumpFileList();
-  void flashDumpFileData(const uint16_t);
-  void flashDumpLastFile();
+  bool initLora();  // Inicjalizacja modułu LoRa (SX1262)
+  static void setOperationFlag();  // Flaga ustawiana przez przerwanie DIO1 (koniec nadawania/odbioru)
+  void prepareLoraStatusMsg(char*, size_t);  // Przygotowanie statusu LoRa do debugu
+  void preparePacket();  // Zapisanie wszystkich danych do pakietu binarnego (BitStorage)
+  void sendPacket();  // Wysłanie pakietu przez LoRa
+  void transmit(const uint8_t*, const size_t);  // Transmisja bufora przez LoRa
+  void transmit(const char*, size_t);  // Transmisja bufora przez LoRa
+  void startListening();  // Przełączenie LoRa w tryb nasłuchiwania
+  void handleCommand(const char* command);  // Parsowanie odebranej komendy i wykonanie akcji
+  void checkRadio();  // Sprawdzenie, czy przyszła nowa wiadomość LoRa
 
-  bool detectLaunch();
-  bool detectBurnout();
-  bool detectApogee();
-  bool detectLanding();
-  bool checkDeploymentConditions(const ParachuteType);
+  bool initFlash();  // Inicjalizacja zewnętrznej pamięci Flash (W25Q128)
+  bool flashFindNextFileNumber(char*, size_t);  // Znalezienie wolnego numeru pliku "data_XXXX.csv"
+  uint16_t findMaxFileNumber();  // Znalezienie ostatniego numeru pliku
+  bool flashOpenNewFile();  // Otwarcie nowego pliku do zapisu danych
+  void flashWriteString(const char*);  // Zapisanie ciągu znaków do pliku na Flash
+  void writeLogToFlash(const char*);
+  void flashFlushBuffer();  // Wymuszenie opróżnienia bufora zapisu
+  void flashCloseFile();  // Zamknięcie pliku danych
+  bool flashRecoverAfterReset();  // Próba odzyskania systemu plików po restarcie
+  void flashDumpFileList();  // Wypisanie listy plików .csv na konsolę
+  void flashDumpFileData(const uint16_t);  // Wypisanie zawartości wskazanego pliku
+  void flashDumpLastFile();  // Wypisanie ostatniego pliku danych
 
-  void sendFlightSummary();
-  void drogueParashuteOpen();
-  void mainParashuteOpen();
-  void updateFlightState();
+  bool detectLaunch();  // Detekcja startu
+  bool detectBurnout();  // Detekcja swobodnego wznoszenia
+  bool detectApogee();  // Detekcja apogeum
+  bool detectLanding();  // Detekcja uderzenia w ziemię
+  bool checkDeploymentConditions(const ParachuteType);  // Sprawdzenie warunków do otwarcia spadochronu
 
-  void initWatchdog();
-  void watchdog();
-  void reinitComponent(bool (Rakieta::*initFunc)());
-  void handleErrors();
+  void sendFlightSummary();  // Wysłanie podsumowania faz lotu przez LoRa i do flash
+  void drogueParashuteOpen();  // Otwarcie spadochronu drogue
+  void mainParashuteOpen();  // Otwarcie spadochronu głównego
+  void updateFlightState();  // Automat maszyny stanów lotu (IDLE -> BOOST -> COAST -> APOGEE -> DESCENT -> LANDED)
 
-  void handleDebugMode();  /// do zmieniania w locie
-  void handleFlightMode();
-  void handleDumpMode();  /// nie wiem co tu się dzieje obecnie
-  void handleSleepMode();  /// chyba będzie ok
-  void handleMode(const uint32_t);
+  void initWatchdog();  // Inicjalizacja niezależnego watchdog (IWDG)
+  void watchdog();  // Odświeżenie watchdog
+  void reinitComponent(bool (Rakieta::*initFunc)());  // Próba reinicjalizacji uszkodzonego komponentu
+  void handleErrors();  // Cykliczna obsługa błędów
+  void handleSerialCommands();  // Odczytkomend z Serial
+
+  void handleDebugMode();  // Główna pętla dla trybu DEBUG
+  void handleFlightMode();  // Główna pętla dla trybu FLIGHT
+  void handleDumpMode(const uint32_t);  // Główna pętla dla trybu DUMP
+  void handleSleepMode(const uint32_t);  // Główna pętla dla trybu SLEEP + możliwość wybudzenia przez DIP switch
+  void handleMode(const uint32_t);  // Dystrybutor wywołujący odpowiednią funkcję `handleXXXMode()` z odpowiednim interwałem
 
 
 public:
   Rakieta();
   ~Rakieta();
   
-  void init();
-  void loop();
+  void init();  // Inicjalizacja całego systemu
+  void loop();  // Główna pętla programu
 };
 
 

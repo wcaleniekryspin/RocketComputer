@@ -1,6 +1,26 @@
 #include "Rakieta.h"
 
 
+/*
+  -"AIR VEHICLE C++ CODING STANDARDS FOR THE SYSTEM DEVELOPMENT AND DEMONSTRATION PROGRAM"
+
+  OGÓLNIE DO ZROBIENIA:
+    -dodać zmienne do preparePacket()
+    -dodać zapis logów na flash
+    -Brak timeoutu w pętlach setOffsets()	Pętla odczytu sensorów (LSM, ADXL, BMP) nie ma limitu czasowego – może wisieć wiecznie, jeśli czujnik przestanie odpowiadać.
+    -Błędna logika w transmit()	if (!operationDone) jest zawsze prawdziwe, bo operationDone zostało ustawione na false tuż przed. Powinno być sprawdzenie flagi z przerwania.
+  
+  NA PÓŹNIEJ:
+    1. Użycie delay() w funkcjach inicjalizujących (AV Rule 131) występuje w: initGPS() – delay(500), setOffsets() – delay(25) i delay(200), systemSleep() – delay(time), transmit() – delay(1), handleSleepMode() – systemSleep(100) i systemSleep(5000)
+    10. Użycie delay()   -    W Rakieta.cpp wielokrotnie używane jest delay(): w setOffsets() delay(25) i delay(200), w initGPS() delay(500), w transmit() delay(1), w systemSleep() delay(time). delay() blokuje wykonanie całego programu na zadany czas, co w systemie czasu rzeczywistego jest niedopuszczalne – prowadzi do utraty danych z sensorów i braku reakcji na krytyczne zdarzenia. Należy zastąpić delay() nieblokującymi timerami opartymi na millis().
+    14. Ograniczone sprawdzanie zakresów danych   -    Dane z sensorów są używane w obliczeniach bez weryfikacji, czy są fizycznie możliwe. Na przykład w detectApogee() porównuje się data.bmp1.lastVerticalSpeed <= APOGEE_VELOCITY_THRESHOLD – ale jeśli lastVerticalSpeed jest NaN lub nieskończonością, wynik będzie nieprawidłowy. Należy przed każdym użyciem sprawdzać, czy wartość jest skończona i mieści się w oczekiwanym przedziale (np. isfinite()).
+    15. Brak jawnych timeoutów dla części operacji   -    Operacje odczytu z I2C, SPI czy GPS nie mają zdefiniowanych timeoutów. Na przykład gps.encode() czyta z bufora UART, ale jeśli dane przestaną napływać, program nie ma informacji o tym po czasie. W transmit() jest timeout dla LoRa, ale to wyjątek. Każda operacja, która może blokować, powinna mieć limit czasu, po którym zostaje przerwana, a komponent oznaczony jako uszkodzony.
+    20. Ograniczona przewidywalność czasowa   -    Użycie delay(), String, debug oraz blokujących operacji I2C/SPI powoduje, że czas wykonania funkcji jest nieokreślony. W systemie czasu rzeczywistego wymagana jest analiza najgorszego czasu wykonania (WCET) i dowiedzenie, że wszystkie terminy są dotrzymane. Obecny kod nie daje żadnych gwarancji – np. handleBmp() może wykonać się szybko lub wolno w zależności od stanu czujnika.
+    21. Możliwe użycie funkcji niedeterministycznych   -    millis() jest zwykle deterministyczne, ale String alokuje pamięć, co może powodować nieprzewidywalne opóźnienia. Ponadto biblioteki Adafruit mogą wewnętrznie używać delay() lub pętli oczekujących, które nie mają gwarantowanego czasu. Standard JSF wymaga eliminacji wszystkich niedeterministycznych konstrukcji, a jeśli to niemożliwe – ścisłej kontroli.
+    24. Brak pełnej kontroli overflow/underflow   -    W obliczeniach całkujących (np. data.lsm.lastTotalSpeed += data.lsm.lastTotalAccel * dt) nie ma zabezpieczeń przed przekroczeniem zakresu float ani przed wartościami NaN. W systemie krytycznym po każdej operacji arytmetycznej należy sprawdzić, czy wynik jest skończony i mieści się w oczekiwanym przedziale, a w razie potrzeby nasycić wartość lub przejść w stan awaryjny.
+    28. Ograniczone logowanie diagnostyczne   -    W trybie FLIGHT logowane są tylko dane telemetryczne (flashWriteString), ale nie loguje się błędów, zmian stanów, timeoutów ani innych zdarzeń systemowych. W przypadku katastrofy brak logów uniemożliwi analizę przyczyny. System powinien zapisywać pełną diagnostykę (z timestampem) do pamięci nieulotnej, a w trybie DEBUG wysyłać przez Serial.
+*/
+
 volatile bool Rakieta::operationDone = false;
 
 // === Konstruktor ===
@@ -61,7 +81,6 @@ Rakieta::Rakieta():
   
   // === Flash ===
   flashWriteCount(0),
-  dumpAddress(0),
   flashDataFile(),
   dumpFile(),
   flashTransport(CS_FLASH, &spiFlash),
@@ -349,7 +368,6 @@ void Rakieta::handleLsm()
       data.lsm.lastTotalAccel = sqrt(ax * ax + ay * ay + az * az);
       data.lsm.lastTotalSpeed += data.lsm.lastTotalAccel * dt;
       data.lsm.lastTotalAlti += data.lsm.lastTotalSpeed * dt;
-      data.lsm.lastTotalRotation = data.lsm.gx + data.lsm.gy + data.lsm.gz;
     }
 
     errorFlags &= ~LSM_ERROR;
@@ -363,9 +381,9 @@ void Rakieta::handleAdxl()
   sensors_event_t event;
   if (adxl.getEvent(&event))
   {
-    float ax = event.acceleration.x - offsets.adxl.ax;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G
-    float ay = event.acceleration.y - offsets.adxl.ay;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G
-    float az = event.acceleration.z - offsets.adxl.az;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G
+    float ax = event.acceleration.x - offsets.adxl.ax;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G: ADXL375_MG2G_MULTIPLIER
+    float ay = event.acceleration.y - offsets.adxl.ay;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G: ADXL375_MG2G_MULTIPLIER
+    float az = event.acceleration.z - offsets.adxl.az;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G: ADXL375_MG2G_MULTIPLIER
     
     if (isnan(ax) || isinf(ax) || isnan(ay) || isinf(ay) || isnan(az) || isinf(az) ||
         fabs(ax) > MAX_ACCEL_ADXL || fabs(ay) > MAX_ACCEL_ADXL || fabs(az) > MAX_ACCEL_ADXL)
@@ -559,26 +577,42 @@ void Rakieta::readSensorsData()
 void Rakieta::printData() const
 {
   debugf("IMU: Accel: %.2f %.2f %.2f G | Gyro: %.2f %.2f %.2f dps | Temp: %.2f *C\n",
-                data.lsm.ax, data.lsm.ay, data.lsm.az, data.lsm.gx, data.lsm.gy, data.lsm.gz, data.lsm.temp);
-  debugf("IMU: Speed: %.2f m/s | Accel: %.3f m/s^2 | Gyro: %.3f d\n",
-                data.lsm.lastTotalSpeed, data.lsm.lastTotalAccel, data.lsm.lastTotalRotation);
+         data.lsm.ax, data.lsm.ay, data.lsm.az, data.lsm.gx, data.lsm.gy, data.lsm.gz, data.lsm.temp);
+  debugf("IMU: Alti: %.2f m | Speed: %.2f m/s | Accel: %.3f m/s^2\n",
+         data.lsm.lastTotalAlti, data.lsm.lastTotalSpeed, data.lsm.lastTotalAccel);
 
-  debugf("ADXL: X=%.2f Y=%.2f Z=%.2f G\n", data.adxl.ax, data.adxl.ay, data.adxl.az);
-  debugf("ADXL: Speed: %.2f m/s | Accel: %.3f m/s^2\n", data.adxl.lastTotalSpeed, data.adxl.lastTotalAccel);
+  debugf("ADXL: Accel: %.2f %.2f %.2f G\n", data.adxl.ax, data.adxl.ay, data.adxl.az);
+  debugf("ADXL: Alti: %.2f m | Speed: %.2f m/s | Accel: %.3f m/s^2\n",
+         data.adxl.lastTotalAlti, data.adxl.lastTotalSpeed, data.adxl.lastTotalAccel);
 
   debugf("BMP1: P=%.2f hPa, Alt=%.1f m, T=%.2f C\n", data.bmp1.pressure, data.bmp1.altitude, data.bmp1.temp);
-  debugf("BMP1: Speed: %.2f\n", data.bmp1.lastVerticalSpeed);
+  debugf("BMP1: Alti: %.2f m | Speed: %.2f m/s\n",
+         data.bmp1.lastAltitude, data.bmp1.lastVerticalSpeed);
   
   debugf("BMP2: P=%.2f hPa, Alt=%.1f m, T=%.2f C\n", data.bmp2.pressure, data.bmp2.altitude, data.bmp2.temp);
-  debugf("BMP2: Speed: %.2f\n", data.bmp2.lastVerticalSpeed);
+  debugf("BMP2: Alti: %.2f m | Speed: %.2f m/s\n",
+         data.bmp2.lastAltitude, data.bmp2.lastVerticalSpeed);
   
-  debugf("GPS: Lat=%.6f Lon=%.6f\n", data.gps.lat, data.gps.lng);
-  debugf("GPS: Alt=%.1f m\n",data.gps.alti);
-  debugf("GPS: Time=%2d:%2d:%2d:%d\n", data.gps.h, data.gps.m, data.gps.s, data.gps.centi);
-  debugf("GPS: Speed:%.2f\n", data.gps.speed);
-  debugf("GPS: Course:%.3f\n", data.gps.course);
-  debugf("GPS: Sat:%2d\n", data.gps.satNum);
-  debugf("GPS: hdop:%2d\n", data.gps.hdop);
+  debugf("GPS: Lat=%.6f Lon=%.6f\n Alt=%.1f m", data.gps.lat, data.gps.lng, data.gps.alti);
+  debugf("GPS: Time=%2d:%2d:%2d:%04d\n", data.gps.h, data.gps.m, data.gps.s, data.gps.centi);
+  debugf("GPS: Speed:%.2f Course:%.3f\n", data.gps.speed, data.gps.course);
+  debugf("GPS: Sat:%2d hdop:%2d\n", data.gps.satNum, data.gps.hdop);
+
+  debugf("BAT: %03.2f\n", data.battery.voltage);
+
+  debugf("Filtered: Accel: %.2f %.2f %.2f G | Gyro: %.2f %.2f %.2f dps\n",
+         data.filtered.ax, data.filtered.ay, data.filtered.az, data.filtered.gx, data.filtered.gy, data.filtered.gz);
+  debugf("Filtered: Alti: %.2f m | Speed: %.2f m/s | Accel: %.3f m/s^2\n",
+         data.filtered.alti, data.filtered.speed, data.filtered.accel);
+  debugf("Filtered: roll:%.2f pitch:%.2\n", data.filtered.roll, data.filtered.pitch);
+
+}
+
+void Rakieta::resetOffsets()
+{
+  memset(&offsets, 0, sizeof(offsets));
+  offsetsSet = false;
+  debugln("[OFFSETS] Reset complete..");
 }
 
 void Rakieta::setOffsets()
@@ -611,9 +645,9 @@ void Rakieta::setOffsets()
       sensors_event_t event;
       if (adxl.getEvent(&event))
       {
-        offsets.adxl.ax += event.acceleration.x;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G
-        offsets.adxl.ay += event.acceleration.y;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G
-        offsets.adxl.az += event.acceleration.z;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G
+        offsets.adxl.ax += event.acceleration.x;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G: ADXL375_MG2G_MULTIPLIER
+        offsets.adxl.ay += event.acceleration.y;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G: ADXL375_MG2G_MULTIPLIER
+        offsets.adxl.az += event.acceleration.z;  /// dorobić chyba trzeba będzie mnożnik z 16G do 200G: ADXL375_MG2G_MULTIPLIER
         offsets.adxl.valid++;
       }
 
@@ -672,6 +706,28 @@ void Rakieta::setOffsets()
   offsetsSet = true;
 }
 
+void Rakieta::prepareGpsOffset(char* buffer, size_t bufferSize)
+{
+  if (!offsetsSet) return;
+  if (buffer == nullptr || bufferSize <= 0) return;
+
+  memset(buffer, 0, bufferSize);
+
+  int16_t written = snprintf(buffer, bufferSize,
+    "GSP offset:Now:%lu,lat:%f,lng:%f,alti:%f",
+    millis(),
+    offsets.gps.lat,
+    offsets.gps.lng,
+    offsets.gps.alti
+  );
+  
+  if (written < 0 || static_cast<size_t>(written) >= bufferSize)
+  {
+    errorFlags |= MSG_TOO_LONG_ERROR;
+    snprintf(buffer, bufferSize, "ERROR:MSG_TOO_LONG,%lu", millis());
+  }
+}
+
 void Rakieta::prepareOffsetsMsg(char* buffer, size_t bufferSize)
 {
   if (!offsetsSet) return;
@@ -680,10 +736,11 @@ void Rakieta::prepareOffsetsMsg(char* buffer, size_t bufferSize)
   memset(buffer, 0, bufferSize);
 
   int16_t written = snprintf(buffer, bufferSize,
-    "ValidNum:Lsm:%d,Adxl%d,Bmp1%d,Bmp2%d,GPS%d,"
-    "Offsets:Lsm:{ax:%f,ay:%f,az:%f,gx:%f,gy:%f,gz:%f}"
-    "Adxl:{ax:%f,ay:%f,az:%f}"
-    "GPS:{lat:%f,lng:%f,altiM:%f}",
+    "ValidNum:Lsm:%d,Adxl:%d,Bmp1:%d,Bmp2:%d,GPS:%d,"
+    "Offsets:Lsm:{ax:%.3f,ay:%.3f,az:%.3f,gx:%.3f,gy:%.3f,gz:%.3f}"
+    "Adxl:{ax:%.3f,ay:%.3f,az:%.3f}"
+    "BMP:{1:%.2f,2:%.2f}"
+    "GPS:{lat:%.6f,lng:%.6f,altiM:%.2f}",
     offsets.lsm.valid,
     offsets.adxl.valid,
     offsets.bmp1.valid,
@@ -698,6 +755,8 @@ void Rakieta::prepareOffsetsMsg(char* buffer, size_t bufferSize)
     offsets.adxl.ax,
     offsets.adxl.ay,
     offsets.adxl.az,
+    offsets.bmp1.alti,
+    offsets.bmp2.alti,
     offsets.gps.lat,
     offsets.gps.lng,
     offsets.gps.alti
@@ -706,7 +765,6 @@ void Rakieta::prepareOffsetsMsg(char* buffer, size_t bufferSize)
   if (written < 0 || static_cast<size_t>(written) >= bufferSize)
   {
     errorFlags |= MSG_TOO_LONG_ERROR;
-    
     snprintf(buffer, bufferSize, "ERROR:MSG_TOO_LONG,%lu", millis());
   }
 }
@@ -717,19 +775,20 @@ void Rakieta::prepareDataLineMsg(char* buffer, size_t bufferSize)
 
   memset(buffer, 0, bufferSize);
   int16_t written = snprintf(buffer, bufferSize,
-    "RocketData:%lu,%lu,%d,%04X,"
+    "RocketData:%lu,%lu,%04X,%d,"
     "%.6f,%.6f,%.2f,%02u,%02u,%02u,%02u,%.2f,%.0f,%u,%u,"
-    "%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.2f,%.4f,"
-    "%.4f,%.4f,%.4f,%.4f,"
+    "%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,"
+    "%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,"
     "%.2f,%.2f,%.2f,%.4f,"
     "%.2f,%.2f,%.2f,%.4f,"
-    "%.1f",
+    "%.1f,"
+    "%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f",
 
     // Timestamp i podstawowe
     millis(),
     packet,
-    static_cast<int>(currentFlightState),
     errorFlags,
+    static_cast<uint16_t>(currentFlightState),
 
     // GPS
     data.gps.lat, data.gps.lng, data.gps.alti,
@@ -739,17 +798,27 @@ void Rakieta::prepareDataLineMsg(char* buffer, size_t bufferSize)
     // LSM6
     data.lsm.ax, data.lsm.ay, data.lsm.az,
     data.lsm.gx, data.lsm.gy, data.lsm.gz,
-    data.lsm.temp, data.lsm.lastTotalSpeed,
+    data.lsm.temp, data.lsm.lastTotalAlti, data.lsm.lastTotalSpeed,
+    data.lsm.lastTotalAccel,
 
     // ADXL
-    data.adxl.ax, data.adxl.ay, data.adxl.az, data.adxl.lastTotalSpeed,
+    data.adxl.ax, data.adxl.ay, data.adxl.az,
+    data.adxl.lastTotalAlti, data.adxl.lastTotalSpeed, data.adxl.lastTotalAccel,
     
-    // BMP
+    // BMP1
     data.bmp1.temp, data.bmp1.pressure, data.bmp1.altitude, data.bmp1.lastVerticalSpeed,
+
+    // BMP2
     data.bmp2.temp, data.bmp2.pressure, data.bmp2.altitude, data.bmp2.lastVerticalSpeed,
 
     // BATTERY
-    data.battery.voltage
+    data.battery.voltage,
+
+    // FILTERED
+    data.filtered.ax, data.filtered.ay, data.filtered.az,
+    data.filtered.gx, data.filtered.gy, data.filtered.gz,
+    data.filtered.alti, data.filtered.speed, data.filtered.accel,
+    data.filtered.roll, data.filtered.pitch
   );
 
   if (written < 0 || static_cast<size_t>(written) >= bufferSize)
@@ -769,44 +838,51 @@ void Rakieta::filterGyro()
 
 void Rakieta::calculateOrientation()
 {
-  data.filtered.pitch = atan2(-data.filtered.ax, sqrt(data.filtered.ay*data.filtered.ay + data.filtered.az*data.filtered.az));
-  data.filtered.roll = atan2(data.filtered.ay, data.filtered.az);
+  data.filtered.pitch = atan2(-data.filtered.ax, sqrt(data.filtered.ay*data.filtered.ay + data.filtered.az*data.filtered.az)) * 180 / 3.1415f;
+  data.filtered.roll = atan2(data.filtered.ay, data.filtered.az) * 180 / 3.1415f;
 }
 
-void Rakieta::filterAcceleration()
+void Rakieta::filterAccel()
 {
-  float weightLSM = 0.6f;
-  float weightADXL = 0.4f;
-
-  if (isnan(data.lsm.lastTotalAccel) || isinf(data.lsm.lastTotalAccel || data.lsm.lastTotalAccel > LSM_MAX_G)) weightLSM = 0.0f;
-  if (isnan(data.adxl.lastTotalAccel) || isinf(data.adxl.lastTotalAccel || data.adxl.lastTotalAccel > ADXL_MAX_G)) weightADXL = 0.0f;
-  
-  float ax_fused = 0.0f, ay_fused = 0.0f, az_fused = 0.0f;
+  float fusedAx = 0.0f, fusedAy = 0.0f, fusedAz = 0.0f;
   float totalWeight = 0.0f;
-  
-  if (!(errorFlags & LSM_ERROR) && weightLSM > 0.0f)
+  float mach = data.filtered.speed / SPEED_OF_SOUND;
+
+  // LSM
+  if (!(errorFlags & LSM_ERROR))
   {
-    ax_fused += data.lsm.ax * weightLSM;
-    ay_fused += data.lsm.ay * weightLSM;
-    az_fused += data.lsm.az * weightLSM;
-    totalWeight += weightLSM;
+    float weight = WEIGHT_LSM_ACCEL;
+    if (data.lsm.lastTotalAccel > LSM_REDUCE_WAGE) weight *= LSM_REDUCE_FACTOR;
+    if (fabs(data.lsm.lastTotalAccel) <= LSM_MAX_G)
+    {
+      fusedAx += data.lsm.ax * weight;
+      fusedAy += data.lsm.ay * weight;
+      fusedAz += data.lsm.az * weight;
+      totalWeight += weight;
+    }
   }
-  if (!(errorFlags & ADXL_ERROR) && weightADXL > 0.0f)
+
+  // ADXL
+  if (!(errorFlags & ADXL_ERROR))
   {
-    ax_fused += data.adxl.ax * weightADXL;
-    ay_fused += data.adxl.ay * weightADXL;
-    az_fused += data.adxl.az * weightADXL;
-    totalWeight += weightADXL;
+    float weight = WEIGHT_ADXL_ACCEL;
+    if (fabs(data.adxl.ax) <= ADXL_MAX_G && fabs(data.adxl.ay) <= ADXL_MAX_G && fabs(data.adxl.az) <= ADXL_MAX_G)
+    {
+      fusedAx += data.adxl.ax * weight;
+      fusedAy += data.adxl.ay * weight;
+      fusedAz += data.adxl.az * weight;
+      totalWeight += weight;
+    }
   }
+
   if (totalWeight > 0.0f)
   {
-    ax_fused /= totalWeight;
-    ay_fused /= totalWeight;
-    az_fused /= totalWeight;
-    
-    data.filtered.ax = FUSION_ALPHA * ax_fused + (1.0f - FUSION_ALPHA) * data.filtered.ax;
-    data.filtered.ay = FUSION_ALPHA * ay_fused + (1.0f - FUSION_ALPHA) * data.filtered.ay;
-    data.filtered.az = FUSION_ALPHA * az_fused + (1.0f - FUSION_ALPHA) * data.filtered.az;
+    data.filtered.ax = FUSION_ALPHA * (fusedAx / totalWeight) + (1.0f - FUSION_ALPHA) * data.filtered.ax;
+    data.filtered.ay = FUSION_ALPHA * (fusedAy / totalWeight) + (1.0f - FUSION_ALPHA) * data.filtered.ay;
+    data.filtered.az = FUSION_ALPHA * (fusedAz / totalWeight) + (1.0f - FUSION_ALPHA) * data.filtered.az;
+    data.filtered.accel = sqrt(data.filtered.ax * data.filtered.ax +
+                               data.filtered.ay * data.filtered.ay +
+                               data.filtered.az * data.filtered.az);
   }
 }
 
@@ -920,9 +996,6 @@ bool Rakieta::initLora()
   if (state == RADIOLIB_ERR_NONE)
   {
     lora.setDio1Action(Rakieta::setOperationFlag);
-    char buffer[512];
-    prepareOffsetsMsg(buffer, sizeof(buffer));
-    debugln(buffer);
     debugln("[LoRa] OK");
     errorFlags &= ~LORA_ERROR;
     startListening();
@@ -967,14 +1040,16 @@ void Rakieta::prepareLoraStatusMsg(char* buffer, size_t bufferSize)
 void Rakieta::preparePacket()
 {
   uint32_t now = millis();
+  // HEADER jest dodawany automatycznie
   message.add(uint32_t(now / 10), timePos, timeLen);
   message.add(uint16_t(packet), packetPos, packetLen);
   message.add(uint16_t(errorFlags), errorPos, errorLen);
-  message.add(uint8_t(currentFlightState), statusPos, statusLen);
+  message.add(uint8_t(currentMode), statusPos, statusLen);
+  message.add(uint8_t(currentFlightState), flightstatusPos, flightstatusLen);
 
-  message.add(int16_t(data.gps.lat * 100000), gpsLatPos, gpsLatLen, true);
-  message.add(int16_t(data.gps.lng * 100000), gpsLngPos, gpsLngLen, true);
-  message.add(uint16_t(data.gps.alti * 10), gpsAltiPos, gpsAltiLen);
+  message.add(int32_t(data.gps.lat * 100000), gpsLatPos, gpsLatLen, true);
+  message.add(int32_t(data.gps.lng * 100000), gpsLngPos, gpsLngLen, true);
+  message.add(uint16_t(data.gps.alti * 10), gpsAltiPos, gpsAltiLen, true);
   message.add(uint8_t(data.gps.h), gpsHourPos, gpsHourLen);
   message.add(uint8_t(data.gps.m), gpsMinPos, gpsMinLen);
   message.add(uint8_t(data.gps.s), gpsSecPos, gpsSecLen);
@@ -984,31 +1059,47 @@ void Rakieta::preparePacket()
   message.add(uint8_t(data.gps.satNum), gpsSatNumPos, gpsSatNumLen);
   message.add(uint8_t(data.gps.hdop), gpsHdopPos, gpsHdopLen);
   
-  message.add(int16_t(data.lsm.ax * 100), lsmAccelXPos, lsmAccelXLen, true);
-  message.add(int16_t(data.lsm.ay * 100), lsmAccelYPos, lsmAccelYLen, true);
-  message.add(int16_t(data.lsm.az * 100), lsmAccelZPos, lsmAccelZLen, true);
+  message.add(int16_t(data.lsm.ax * 10), lsmAccelXPos, lsmAccelXLen, true);
+  message.add(int16_t(data.lsm.ay * 10), lsmAccelYPos, lsmAccelYLen, true);
+  message.add(int16_t(data.lsm.az * 10), lsmAccelZPos, lsmAccelZLen, true);
   message.add(int16_t(data.lsm.gx * 10), lsmGyroXPos, lsmGyroXLen, true);
   message.add(int16_t(data.lsm.gy * 10), lsmGyroYPos, lsmGyroYLen, true);
   message.add(int16_t(data.lsm.gz * 10), lsmGyroZPos, lsmGyroZLen, true);
   message.add(int8_t(data.lsm.temp), lsmTempPos, lsmTempLen, true);
+  message.add(int16_t(data.lsm.lastTotalAlti * 10), lsmAltiPos, lsmAltiLen, true);
   message.add(int16_t(data.lsm.lastTotalSpeed * 10), lsmSpeedPos, lsmSpeedLen, true);
+  message.add(int16_t(data.lsm.lastTotalAccel * 10), lsmAccelPos, lsmAccelLen, true);
   
   message.add(int16_t(data.adxl.ax * 10), adxlAccelXPos, adxlAccelXLen, true);
   message.add(int16_t(data.adxl.ay * 10), adxlAccelYPos, adxlAccelYLen, true);
   message.add(int16_t(data.adxl.az * 10), adxlAccelZPos, adxlAccelZLen, true);
+  message.add(int16_t(data.adxl.lastTotalAlti * 10), adxlAltiPos, adxlAltiLen, true);
   message.add(int16_t(data.adxl.lastTotalSpeed * 10), adxlSpeedPos, adxlSpeedLen, true);
+  message.add(int16_t(data.adxl.lastTotalAccel * 10), adxlAccelPos, adxlAccelLen, true);
 
   message.add(int8_t(data.bmp1.temp), bmp1TempPos, bmp1TempLen, true);
-  message.add(uint16_t(data.bmp1.pressure * 10), bmp1PressPos, bmp1PressLen);
-  message.add(uint16_t(data.bmp1.altitude * 10), bmp1AltiPos, bmp1AltiLen);
+  message.add(uint16_t(data.bmp1.pressure / 100), bmp1PressPos, bmp1PressLen);
+  message.add(uint16_t(data.bmp1.altitude * 10), bmp1AltiPos, bmp1AltiLen, true);
   message.add(int16_t(data.bmp1.lastVerticalSpeed * 10), bmp1SpeedPos, bmp1SpeedLen, true);
 
   message.add(int8_t(data.bmp2.temp), bmp2TempPos, bmp2TempLen, true);
-  message.add(uint16_t(data.bmp2.pressure * 10), bmp2PressPos, bmp2PressLen);
-  message.add(uint16_t(data.bmp2.altitude * 10), bmp2AltiPos, bmp2AltiLen);
+  message.add(uint16_t(data.bmp2.pressure / 100), bmp2PressPos, bmp2PressLen);
+  message.add(uint16_t(data.bmp2.altitude * 10), bmp2AltiPos, bmp2AltiLen, true);
   message.add(int16_t(data.bmp2.lastVerticalSpeed * 10), bmp2SpeedPos, bmp2SpeedLen, true);
 
   message.add(uint8_t(data.battery.voltage * 10), batteryPos, batteryLen);
+
+  message.add(int16_t(data.filtered.ax * 10), filteredAccelXPos, filteredAccelXLen, true);
+  message.add(int16_t(data.filtered.ay * 10), filteredAccelYPos, filteredAccelYLen, true);
+  message.add(int16_t(data.filtered.az * 10), filteredAccelZPos, filteredAccelZLen, true);
+  message.add(int16_t(data.filtered.gx * 10), filteredGyroXPos, filteredGyroXLen, true);
+  message.add(int16_t(data.filtered.gy * 10), filteredGyroYPos, filteredGyroYLen, true);
+  message.add(int16_t(data.filtered.gz * 10), filteredGyroZPos, filteredGyroZLen, true);
+  message.add(int16_t(data.filtered.alti * 10), filteredAltiPos, filteredAltiLen, true);
+  message.add(int16_t(data.filtered.speed * 10), filteredSpeedPos, filteredSpeedLen, true);
+  message.add(int16_t(data.filtered.accel * 10), filteredAccelPos, filteredAccelLen, true);
+  message.add(int16_t(data.filtered.roll), filteredRollPos, filteredRollLen, true);
+  message.add(int16_t(data.filtered.pitch), filteredPitchPos, filteredPitchLen, true);
 }
 
 void Rakieta::sendPacket()
@@ -1098,33 +1189,139 @@ void Rakieta::startListening()
   }
 }
 
-/// trzeba pododawać komendy
 void Rakieta::handleCommand(const char* command)
 {
   if (command == nullptr) return;
+
+  // Kopia komendy do modyfikacji (dla strtok)
+  char cmdBuffer[64];
+  strncpy(cmdBuffer, command, sizeof(cmdBuffer) - 1);
+  cmdBuffer[sizeof(cmdBuffer) - 1] = '\0';
+
+  char* cmd = strtok(cmdBuffer, " ");
+  if (cmd == nullptr) return;
+
+  // Pobranie ewentualnego argumentu
+  char* arg = strtok(nullptr, " ");
   
   // Użycie strcmp do porównywania napisów
   if (strcmp(command, "RESET") == 0) { systemReset(); }
+  else if (strcmp(command, "RESET_OFFSETS") == 0) { resetOffsets(); }
   else if (strcmp(command, "SET_OFFSETS") == 0) { setOffsets(); }
-  else if (strcmp(command, "GET_GPS_OFFSET") == 0) { sendGpsOffset(); }
   else if (strcmp(command, "GET_RAW_DATA") == 0) { readSensorsData(); sendPacket(); }
   else if (strcmp(command, "INIT_WATCHDOG") == 0) { initWatchdog(); }
+  else if (strcmp(cmd, "DEPLOY_DROGUE") == 0) { drogueParashuteOpen(); }
+  else if (strcmp(cmd, "DEPLOY_MAIN") == 0) { mainParashuteOpen(); }
+  else if (strcmp(cmd, "VERSION") == 0) { debugln("Rocket v1.0"); transmit("Rocket v1.0", 11); }
+  else if (strcmp(command, "GET_GPS_OFFSET") == 0)
+  {
+    char offBuf[128];
+    prepareGpsOffset(offBuf, sizeof(offBuf));
+    debugln(offBuf);
+    transmit(offBuf, sizeof(offBuf));
+  }
   else if (strcmp(command, "GET_OFFSETS") == 0)
   {
     char offBuf[256];
     prepareOffsetsMsg(offBuf, sizeof(offBuf));
+    debugln(offBuf);
+    transmit(offBuf, sizeof(offBuf));
+  }
+  else if (strcmp(command, "GET_LORA_STATUS") == 0)
+  {
+    char offBuf[128];
+    prepareLoraStatusMsg(offBuf, sizeof(offBuf));
+    debugln(offBuf);
     transmit(offBuf, sizeof(offBuf));
   }
   else if (strcmp(command, "GET_DATA") == 0)
   {
-    char dataBuf[256];
+    char dataBuf[1024];
     prepareDataLineMsg(dataBuf, sizeof(dataBuf));
+    debugln(dataBuf);
     transmit(dataBuf, sizeof(dataBuf));
+  }
+  else if (strcmp(cmd, "HELP") == 0)
+  {
+    const char* helpMsg =
+        "Commands: HELP, VERSION, STATUS, LED1 ON/OFF, LED2 ON/OFF, BUZZER ON/OFF, "
+        "DEPLOY_DROGUE, DEPLOY_MAIN, SET_MODE <mode>, SET_FLIGHT_STATE <state>, "
+        "INIT_WATCHDOG, GET_ERRORS, CLEAR_ERRORS, RESET, "
+        "SET_OFFSETS, GET_GPS_OFFSET, GET_OFFSETS, GET_RAW_DATA";
+    debugln(helpMsg);
+    transmit(helpMsg, strlen(helpMsg));
+  }
+  else if (strcmp(cmd, "GET_STATUS") == 0)
+  {
+    char statusBuf[128];
+    snprintf(statusBuf, sizeof(statusBuf),
+      "Mode:%d, Flight:%d, Errors:0x%04X, Uptime:%lu, Batt:%.2fV",
+      static_cast<int>(currentMode), static_cast<int>(currentFlightState),
+      errorFlags, millis() / 1000, data.battery.voltage);
+    debugln(statusBuf);
+    transmit(statusBuf, strlen(statusBuf));
+  }
+  else if (strcmp(cmd, "LED1") == 0 && arg != nullptr)
+  {
+    if (strcmp(arg, "ON") == 0) { digitalWrite(LED_1, HIGH); led1IsOn = true; led1OffTime = millis() + 10000; }
+    else if (strcmp(arg, "OFF") == 0) { digitalWrite(LED_1, LOW); led1OffTime = 0; }
+  }
+  else if (strcmp(cmd, "LED2") == 0 && arg != nullptr)
+  {
+    if (strcmp(arg, "ON") == 0) { digitalWrite(LED_2, HIGH); led2IsOn = true; led2OffTime = millis() + 10000; }
+    else if (strcmp(arg, "OFF") == 0) { digitalWrite(LED_2, LOW); led2OffTime = 0; }
+  }
+  else if (strcmp(cmd, "BUZZER") == 0 && arg != nullptr)
+  {
+    if (strcmp(arg, "ON") == 0) { digitalWrite(BUZZER, HIGH); buzzerIsOn = true; buzzerOffTime = millis() + 5000; }
+    else if (strcmp(arg, "OFF") == 0) { digitalWrite(BUZZER, LOW); buzzerOffTime = 0; }
+  }
+  else if (strcmp(cmd, "SET_MODE") == 0 && arg != nullptr)
+  {
+    if (strcmp(arg, "DEBUG") == 0) currentMode = SystemMode::DEBUG;
+    else if (strcmp(arg, "FLIGHT") == 0) currentMode = SystemMode::FLIGHT;
+    else if (strcmp(arg, "DUMP") == 0) currentMode = SystemMode::DUMP;
+    else if (strcmp(arg, "SLEEP") == 0) currentMode = SystemMode::SLEEP;
+    else { debugln("Invalid mode"); transmit("Invalid mode", 12); return; }
+    debugln("Mode changed");
+    transmit("Mode changed", 12);
+  }
+  else if (strcmp(cmd, "SET_FLIGHT_STATE") == 0 && arg != nullptr)
+  {
+    if (strcmp(arg, "IDLE") == 0) currentFlightState = FlightState::IDLE;
+    else if (strcmp(arg, "BOOST") == 0) currentFlightState = FlightState::BOOST;
+    else if (strcmp(arg, "COAST") == 0) currentFlightState = FlightState::COAST;
+    else if (strcmp(arg, "APOGEE") == 0) currentFlightState = FlightState::APOGEE;
+    else if (strcmp(arg, "DESCENT") == 0) currentFlightState = FlightState::DESCENT;
+    else if (strcmp(arg, "LANDED") == 0) currentFlightState = FlightState::LANDED;
+    else { debugln("Invalid flight mode"); transmit("Invalid flight mode", 19); return; }
+    debugln("Flight mode changed");
+    transmit("Flight mode changed", 19);
+  }
+  else if (strcmp(cmd, "GET_ERRORS") == 0)
+  {
+    char errBuf[128];
+    snprintf(errBuf, sizeof(errBuf),
+             "Errors: LORA=%d LSM=%d BMP1=%d BMP2=%d ADXL=%d GPS=%d FLASH=%d FILE=%d LONG=%d",
+             !!(errorFlags & LORA_ERROR), !!(errorFlags & LSM_ERROR),
+             !!(errorFlags & BMP1_ERROR), !!(errorFlags & BMP2_ERROR),
+             !!(errorFlags & ADXL_ERROR), !!(errorFlags & GPS_ERROR),
+             !!(errorFlags & FLASH_ERROR), !!(errorFlags & FLASH_FILE_ERROR),
+              !!(errorFlags & MSG_TOO_LONG_ERROR));
+    debugln(errBuf);
+    transmit(errBuf, strlen(errBuf));
+  }
+  else if (strcmp(cmd, "CLEAR_ERRORS") == 0)
+  {
+    errorFlags = 0;
+    debugln("Errors cleared");
+    transmit("Errors cleared", 14);
   }
   else
   {
     char errBuf[25];
     snprintf(errBuf, sizeof(errBuf), "ERROR:UNKNOWN_COMMAND");
+    debugln(errBuf);
     transmit(errBuf, sizeof(errBuf));
   }
 }
@@ -1159,32 +1356,6 @@ void Rakieta::checkRadio()
   }
 }
 
-void Rakieta::sendGpsOffset()
-{
-  if (!offsetsSet) return;
-
-  char buffer[128];
-  const size_t bufferSize = sizeof(buffer);
-  memset(buffer, 0, bufferSize);
-
-  int16_t written = snprintf(buffer, bufferSize,
-    "GSP offset:Now:%lu,lat:%f,lng:%f,alti:%f",
-    millis(),
-    offsets.gps.lat,
-    offsets.gps.lng,
-    offsets.gps.alti
-  );
-  
-  if (written < 0 || static_cast<size_t>(written) >= bufferSize)
-  {
-    errorFlags |= MSG_TOO_LONG_ERROR;
-    
-    snprintf(buffer, bufferSize, "ERROR:MSG_TOO_LONG,%lu", millis());
-  }
-  
-  transmit(buffer, bufferSize);
-}
-
 bool Rakieta::initFlash()
 {
   if (flash.begin())
@@ -1202,13 +1373,9 @@ bool Rakieta::initFlash()
 
 bool Rakieta::flashFindNextFileNumber(char* fileName, size_t bufferSize)
 {
-  if (fileName == nullptr || bufferSize < 14)  // minimum "data_0000.csv" + null
-  {
-    return false;
-  }
+  if (fileName == nullptr || bufferSize < 14) return false;
   
   uint16_t fileNumber = 0;
-
   while (fileNumber < MAX_FILE_NUMBER)
   {
     snprintf(fileName, bufferSize, "data_%04d.csv", fileNumber);
@@ -1225,6 +1392,41 @@ bool Rakieta::flashFindNextFileNumber(char* fileName, size_t bufferSize)
   debugln("Too many data files!");
   errorFlags |= FLASH_FILE_ERROR;
   return false;
+}
+
+uint16_t Rakieta::findMaxFileNumber()
+{
+  File32 root = fatfs.open("/");
+  if (!root || !root.isDirectory())
+  {
+    debugln("[FLASH] Cannot open root directory.");
+    return 0;
+  }
+
+  uint16_t maxNumber = 0;
+  char fileName[20];
+  File32 file;
+
+  while ((file = root.openNextFile()))
+  {
+    if (!file.isDirectory())
+    {
+      file.getName(fileName, sizeof(fileName));
+      if (strncmp(fileName, "data_", 5) == 0)
+      {
+        char* dotPos = strrchr(fileName, '.');
+        if (dotPos != nullptr && strcmp(dotPos, ".csv") == 0)
+        {
+          uint16_t num = atoi(fileName + 5);
+          if (num > maxNumber) maxNumber = num;
+        }
+      }
+    }
+    watchdog();
+    file.close();
+  }
+  root.close();
+  return maxNumber;
 }
 
 bool Rakieta::flashOpenNewFile()
@@ -1268,22 +1470,16 @@ bool Rakieta::flashOpenNewFile()
 
 void Rakieta::flashWriteString(const char* msg)
 {
-  if (msg == nullptr)
-  {
-    errorFlags |= FLASH_NULL_MSG_ERROR;
-    return;
-  }
-
-  if (flash.isBusy())
-  {
-    debugln("Flash not ready!");
-    return;
-  }
-  
   if (!flashDataFile)
   {
     debugln("File not open!");
     errorFlags |= FLASH_FILE_ERROR;
+    return;
+  }
+  
+  if (flash.isBusy())
+  {
+    debugln("Flash not ready!");
     return;
   }
   
@@ -1302,6 +1498,20 @@ void Rakieta::flashWriteString(const char* msg)
   {
     flashFlushBuffer();
   }
+}
+
+void Rakieta::writeLogToFlash(const char* msg)
+{
+  if (!flashDataFile)
+  {
+    errorFlags |= FLASH_FILE_ERROR;
+    return;
+  }
+  if (flash.isBusy()) return;
+  
+  char logLine[256];
+  snprintf(logLine, sizeof(logLine), "#LOG:%lu,%s", millis(), msg);
+  flashWriteString(logLine);
 }
 
 void Rakieta::flashFlushBuffer()
@@ -1342,38 +1552,7 @@ bool Rakieta::flashRecoverAfterReset()
     watchdog();
   }
 
-  File32 root = fatfs.open("/");
-  if (!root || !root.isDirectory())
-  {
-    debugln("[FLASH] Cannot open root directory.");
-    return false;
-  }
-
-  uint16_t maxNumber = 0;
-  char fileName[20];
-  File32 file;
-
-  while ((file = root.openNextFile()))
-  {
-    if (!file.isDirectory())
-    {
-      file.getName(fileName, sizeof(fileName));
-
-      if (strncmp(fileName, "data_", 5) == 0)
-      {
-        char* dotPos = strrchr(fileName, '.');
-        if (dotPos != nullptr && strcmp(dotPos, ".csv") == 0)
-        {
-          // Wyciągnij numer z nazwy pliku
-          uint16_t num = atoi(fileName + 5);
-          if (num > maxNumber) maxNumber = num;
-        }
-      }
-    }
-    watchdog();
-    file.close();
-  }
-  root.close();
+  uint16_t maxNumber = findMaxFileNumber();
 
   char filename[32];
   snprintf(filename, sizeof(filename), "data_%04d.csv", maxNumber);
@@ -1440,7 +1619,7 @@ void Rakieta::flashDumpFileData(const uint16_t fileNumber)
   char filename[32];
   snprintf(filename, sizeof(filename), "data_%04d.csv", fileNumber);
 
-  File32 dumpFile = fatfs.open(filename, FILE_READ);
+  dumpFile = fatfs.open(filename, FILE_READ);
   if (!dumpFile)
   {
     debugf("[FLASH] Cannot open file %s\n", filename);
@@ -1449,7 +1628,7 @@ void Rakieta::flashDumpFileData(const uint16_t fileNumber)
   watchdog();
 
   debugf("=== DUMP OF %s ===\n", filename);
-  char line[256];
+  char line[512];
 
   while (dumpFile.available())
   {
@@ -1472,48 +1651,15 @@ void Rakieta::flashDumpFileData(const uint16_t fileNumber)
 
 void Rakieta::flashDumpLastFile()
 {
-  File32 root = fatfs.open("/");
-  if (!root || !root.isDirectory())
-  {
-    debugln("[FLASH] Cannot open root directory.");
-    return;
-  }
-
-  uint16_t lastNumber = 0;
-  char fileName[20];
-  File32 dumpFile;
-
-  while ((dumpFile = root.openNextFile()))
-  {
-    if (!dumpFile.isDirectory())
-    {
-      dumpFile.getName(fileName, sizeof(fileName));
-
-      if (strncmp(fileName, "data_", 5) == 0)
-      {
-        char* dotPos = strrchr(fileName, '.');
-        if (dotPos != nullptr && strcmp(dotPos, ".csv") == 0)
-        {
-          uint16_t num = atoi(fileName + 5);
-          if (num > lastNumber) lastNumber = num;
-        }
-      }
-    }
-    watchdog();
-    dumpFile.close();
-  }
-  root.close();
-
+  uint16_t lastNumber = findMaxFileNumber();
   if (lastNumber == 0)
   {
     debugln("[FLASH] No data files found.");
     return;
   }
-
   flashDumpFileData(lastNumber);
 }
 
-// do zastanowienia się
 bool Rakieta::detectLaunch()
 {
   if (isnan(data.filtered.accel) || isinf(data.filtered.accel) || !isfinite(data.filtered.accel)) return false;
@@ -1529,7 +1675,6 @@ bool Rakieta::detectLaunch()
   return false;
 }
 
-// do zastanowienia się
 bool Rakieta::detectBurnout()
 {
   if (isnan(data.filtered.accel) || isinf(data.filtered.accel) || !isfinite(data.filtered.accel)) return false;
@@ -1545,7 +1690,6 @@ bool Rakieta::detectBurnout()
   return false;
 }
 
-// do zastanowienia się
 bool Rakieta::detectApogee()
 {
   if (isnan(data.filtered.speed) || isinf(data.filtered.speed) || !isfinite(data.filtered.speed) ||
@@ -1564,7 +1708,6 @@ bool Rakieta::detectApogee()
   return false;
 }
 
-// do zastanowienia się
 bool Rakieta::detectLanding()
 {
   if (isnan(data.filtered.speed) || isinf(data.filtered.speed) || !isfinite(data.filtered.speed)) return false;
@@ -1666,7 +1809,7 @@ void Rakieta::updateFlightState()
     }
     case FlightState::APOGEE:
     {
-      if ((!drogueDeployed && checkDeploymentConditions(ParachuteType::DROGUE)) || (millis() - launchDetectTime > DROGUE_PARASHUTE_TIMEOUT))
+      if ((!drogueDeployed && (checkDeploymentConditions(ParachuteType::DROGUE)) || (millis() - launchDetectTime > DROGUE_PARASHUTE_TIMEOUT)))
       {
         drogueParashuteOpen();
         drogueDeployed = true;
@@ -1679,7 +1822,7 @@ void Rakieta::updateFlightState()
     }
     case FlightState::DESCENT:
     {
-      if ((!mainDeployed && checkDeploymentConditions(ParachuteType::MAIN)) || (millis() - launchDetectTime > MAIN_PARASHUTE_TIMEOUT))
+      if ((!mainDeployed && (checkDeploymentConditions(ParachuteType::MAIN)) || (millis() - launchDetectTime > MAIN_PARASHUTE_TIMEOUT)))
       {
         mainParashuteOpen();
         mainDeployed = true;
@@ -1753,8 +1896,6 @@ void Rakieta::handleErrors()
   if (errorFlags & ADXL_ERROR)   reinitComponent(&Rakieta::initADXL);
   if (errorFlags & GPS_ERROR)    reinitComponent(&Rakieta::initGPS);
 
-  watchdog();
-  
   // 4. Dodatkowe flagi plików (tylko loguj, nie reinicjalizuj)
   if (errorFlags & FLASH_FILE_ERROR)
   {
@@ -1762,26 +1903,13 @@ void Rakieta::handleErrors()
     if (flashDataFile.isOpen()) flashCloseFile();
     if (!flashDataFile.isOpen()) flashOpenNewFile();
     if (flashDataFile.isOpen()) errorFlags &= ~FLASH_FILE_ERROR;
-    watchdog();
   }
+
+  watchdog();
 }
 
-
-
-
-
-// === Obsługa trybów ===
-void Rakieta::handleDebugMode()  /// do zmieniania w trakcie testowania
+void Rakieta::handleSerialCommands()
 {
-  static bool wypisanie = false;
-  if (!wypisanie)
-  {
-    debugln("\n=== TRYB DEBUG: wypisywanie czujnikow ===");
-    debugln("----------------------------------------");
-    wypisanie = true;
-  }
-
-  // Obsługa komend z Serial
   if (Serial.available())
   {
     char cmd[32];
@@ -1792,7 +1920,20 @@ void Rakieta::handleDebugMode()  /// do zmieniania w trakcie testowania
       handleCommand(cmd);
     }
   }
+}
 
+// === Obsługa trybów ===
+void Rakieta::handleDebugMode()
+{
+  static bool wypisanie = false;
+  if (!wypisanie)
+  {
+    debugln("\n=== TRYB DEBUG: wypisywanie czujnikow ===");
+    debugln("----------------------------------------");
+    wypisanie = true;
+  }
+
+  handleSerialCommands();
   checkRadio();
 
   /// trzeba usuwać i sprawdzać po kolei
@@ -1802,14 +1943,17 @@ void Rakieta::handleDebugMode()  /// do zmieniania w trakcie testowania
   handleAdxl();
   handleGPS();
   handleBattery();
+  /// gdzy będzie ok zamienić na readSensorsData()
+
   printData();
+  sendPacket();  /// opcjonalnie
 }
 
 void Rakieta::handleFlightMode()
 {
   checkRadio();
   
-  uint32_t interval = (currentFlightState == FlightState::LANDED) ? INTERVAL_IDLE : INTERVAL_FLIGHT;
+  uint32_t interval = (currentFlightState == FlightState::LANDED) ? INTERVAL_TOUCHDOWN : INTERVAL_BURN;
   uint32_t now = millis();
 
   if (now - lastFlightModeLoop >= interval)
@@ -1818,24 +1962,107 @@ void Rakieta::handleFlightMode()
 
     readSensorsData();
     filterGyro();
-    filterAcceleration();
+    filterAccel();
     filterSpeed();
     filterAlti();
+    calculateOrientation();
+
     updateFlightState();
 
-    char msg[256];
+    char msg[1024];
     prepareDataLineMsg(msg, sizeof(msg));
     sendPacket();
     flashWriteString(msg);
   }
 }
 
-void Rakieta::handleDumpMode()  /// trzeba dopisać jak się zdecyduję jak to zrobić
+void Rakieta::handleDumpMode(const uint32_t now)
 {
-  ///
+  static enum DumpState {
+    WAITING_FOR_COMMAND,
+    WAITING_FOR_FILE_NUMBER
+  } state = WAITING_FOR_COMMAND;
+
+  static uint32_t lastMenuPrint = 0;
+
+  // Wypisanie menu co 10 sekund lub po wejściu w tryb
+  if (state == WAITING_FOR_COMMAND && (now - lastMenuPrint >= 10000 || lastMenuPrint == 0))
+  {
+    lastMenuPrint = now;
+    debugln("\n=== TRYB DUMP ===");
+    debugln("1. Wyświetl listę plików");
+    debugln("2. Wybierz numer pliku do odczytu (4-cyfry)");
+    debugln("3. Wypisz zawartość ostatniego pliku");
+    debug("Wybierz opcję (1-3): ");
+  }
+
+  // Odczyt komendy z Serial (tylko gdy oczekujemy)
+  if (state == WAITING_FOR_COMMAND && Serial.available())
+  {
+    char cmd = Serial.read();
+    // opróżnienie bufora do końca linii
+    while (Serial.available() && Serial.peek() != '\n') Serial.read();
+    if (Serial.peek() == '\n') Serial.read();
+
+    switch (cmd)
+    {
+      case '1':
+        debugln("\n--- LISTA PLIKÓW ---");
+        flashDumpFileList();
+        debugln("---------------------");
+        break;
+      case '2':
+        debug("\nPodaj numer pliku (4 cyfry, np. 0012): ");
+        state = WAITING_FOR_FILE_NUMBER;
+        break;
+      case '3':
+        debugln("\n--- OSTATNI PLIK ---");
+        flashDumpLastFile();
+        debugln("--------------------");
+        break;
+      default:
+        debugln("Nieprawidłowa opcja. Wybierz 1, 2 lub 3.");
+        break;
+    }
+  }
+  else if (state == WAITING_FOR_FILE_NUMBER && Serial.available())
+  {
+    char buf[8] = {0};
+    int idx = 0;
+    uint32_t startTime = millis();
+    // czytaj do napotkania '\n' lub timeout 10s
+    while (millis() - startTime < 10000)
+    {
+      if (Serial.available())
+      {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r')
+          break;
+        if (idx < 7 && isdigit(c))
+          buf[idx++] = c;
+      }
+      delay(5);
+    }
+
+    uint16_t fileNumber = atoi(buf);
+    char filename[32];
+    snprintf(filename, sizeof(filename), "data_%04d.csv", fileNumber);
+
+    if (fileNumber > 0 && fileNumber <= MAX_FILE_NUMBER && fatfs.exists(filename))
+    {
+      debugf("Zrzucam plik %s\n", filename);
+      flashDumpFileData(fileNumber);
+    }
+    else
+    {
+      debugf("Plik %s nie istnieje.\n", filename);
+    }
+    state = WAITING_FOR_COMMAND;
+    lastMenuPrint = 0;
+  }
 }
 
-void Rakieta::handleSleepMode()  /// chyba będzie ok
+void Rakieta::handleSleepMode(const uint32_t now)
 {
   SystemMode oldMode = currentMode;
   setSystemMode();
@@ -1850,9 +2077,8 @@ void Rakieta::handleSleepMode()  /// chyba będzie ok
   {
     currentMode = SystemMode::SLEEP;
   }
-  
-  // TODO: tu można dodać faktyczne uśpienie (__WFI())
-  systemSleep(1000);
+
+  systemSleep(5000);
 }
 
 void Rakieta::handleMode(const uint32_t now)
@@ -1884,22 +2110,18 @@ void Rakieta::handleMode(const uint32_t now)
       if (now - lastDumpProgress >= INTERVAL_DUMP)
       {
         lastDumpProgress = now;
-        handleDumpMode();
+        handleDumpMode(now);
       }
       break;
     case SystemMode::SLEEP:
       if (now - lastSleepCheck >= INTERVAL_SLEEP)
       {
         lastSleepCheck = now;
-        handleSleepMode();
+        handleSleepMode(now);
       }
       break;
   }
 }
-
-
-
-
 
 void Rakieta::init()
 {
@@ -1915,6 +2137,7 @@ void Rakieta::init()
   initGPS();
   initLora();
   initFlash();
+  flashRecoverAfterReset();
 
   setSystemMode();
   printSystemMode();
@@ -1934,8 +2157,6 @@ void Rakieta::init()
     systemSleep(200);
   }
   
-  if (currentMode != SystemMode::SLEEP) setOffsets();
-
   debugln("\n=== INICJALIZACJA ZAKOŃCZONA ===\n");
 }
 
@@ -1954,22 +2175,9 @@ void Rakieta::loop()
   watchdog();
   handleMode(now);
   watchdog();
+  now = millis();
   updateLeds(now);
-  watchdog();
   updateBuzzer(now);
-  watchdog();
   updateSolenoid(now);
-  watchdog();
   systemSleep(5);
 }
-
-
-
-
-
-
-
-
-
-
-
