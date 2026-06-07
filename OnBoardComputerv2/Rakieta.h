@@ -191,6 +191,7 @@ private:
   BitStorage message;
 
   // === Flash ===
+  uint8_t summarySend;
   uint16_t flashWriteCount;
   // String currentFileName;
   File32 flashDataFile;
@@ -232,9 +233,9 @@ private:
   void printData() const;  // Wypisanie wszystkich danych przez Serial
   void resetOffsets();  // Resetowanie offsetów dla sensorów i GPS
   void setOffsets();  // Wyznaczenie offsetów dla sensorów i GPS
-  void prepareGpsOffset(char* buffer, size_t bufferSize);  // Przygotowanie komunikatu z offsetami GPS
-  void prepareOffsetsMsg(char*, size_t);  // Przygotowanie komunikatu z offsetami
-  void prepareDataLineMsg(char*, size_t);  // Przygotowanie linii danych telemetrycznych (CSV) do zapisu/flash/LoRa
+  void prepareGpsOffset(char*, const size_t);  // Przygotowanie komunikatu z offsetami GPS
+  void prepareOffsetsMsg(char*, const size_t);  // Przygotowanie komunikatu z offsetami
+  void prepareDataLineMsg(char*, const size_t);  // Przygotowanie linii danych telemetrycznych (CSV) do zapisu/flash/LoRa
   void filterGyro();  // Filtracja dolnoprzepustowa danych z żyroskopu
   void calculateOrientation();  // Obliczenie kąta nachylenia (pitch) i przechylenia (roll) z przefiltrowanego przyspieszenia
   void filterAccel();  // Fuzja danych akcelerometrów z LSM i ADXL
@@ -243,13 +244,13 @@ private:
 
   bool initLora();  // Inicjalizacja modułu LoRa (SX1262)
   static void setOperationFlag();  // Flaga ustawiana przez przerwanie DIO1 (koniec nadawania/odbioru)
-  void prepareLoraStatusMsg(char*, size_t);  // Przygotowanie statusu LoRa do debugu
+  void prepareLoraStatusMsg(char*, const size_t);  // Przygotowanie statusu LoRa do debugu
   void preparePacket();  // Zapisanie wszystkich danych do pakietu binarnego (BitStorage)
   void sendPacket();  // Wysłanie pakietu przez LoRa
   void transmit(const uint8_t*, const size_t);  // Transmisja bufora przez LoRa
-  void transmit(const char*, size_t);  // Transmisja bufora przez LoRa
+  void transmit(const char*, const size_t);  // Transmisja bufora przez LoRa
   void startListening();  // Przełączenie LoRa w tryb nasłuchiwania
-  void handleCommand(const char* command);  // Parsowanie odebranej komendy i wykonanie akcji
+  void handleCommand(const char*);  // Parsowanie odebranej komendy i wykonanie akcji
   void checkRadio();  // Sprawdzenie, czy przyszła nowa wiadomość LoRa
 
   bool initFlash();  // Inicjalizacja zewnętrznej pamięci Flash (W25Q128)
@@ -260,7 +261,6 @@ private:
   void writeLogToFlash(const char*);
   void flashFlushBuffer();  // Wymuszenie opróżnienia bufora zapisu
   void flashCloseFile();  // Zamknięcie pliku danych
-  bool flashRecoverAfterReset();  // Próba odzyskania systemu plików po restarcie
   void flashDumpFileList();  // Wypisanie listy plików .csv na konsolę
   void flashDumpFileData(const uint16_t);  // Wypisanie zawartości wskazanego pliku
   void flashDumpLastFile();  // Wypisanie ostatniego pliku danych
@@ -269,7 +269,7 @@ private:
   bool detectBurnout();  // Detekcja swobodnego wznoszenia
   bool detectApogee();  // Detekcja apogeum
   bool detectLanding();  // Detekcja uderzenia w ziemię
-  bool checkDeploymentConditions(const ParachuteType);  // Sprawdzenie warunków do otwarcia spadochronu
+  bool checkDeploymentConditions(const ParachuteType) const;  // Sprawdzenie warunków do otwarcia spadochronu
 
   void sendFlightSummary();  // Wysłanie podsumowania faz lotu przez LoRa i do flash
   void drogueParashuteOpen();  // Otwarcie spadochronu drogue

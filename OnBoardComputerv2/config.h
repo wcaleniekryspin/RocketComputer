@@ -206,35 +206,20 @@ constexpr uint32_t OFFSET_GPS_INTERVAL       = 250;
 
 // Watchdog
 constexpr uint32_t WATCHDOG_INTERVAL         = 100;
+constexpr uint16_t IWDG_KEY_UNLOCK           = 0x5555U;
+constexpr uint16_t IWDG_KEY_REFRESH          = 0xAAAAU;
+constexpr uint16_t IWDG_KEY_START            = 0xCCCCU;
+constexpr uint8_t  IWDG_PRESCALER            = 4U;      // /64
+constexpr uint16_t IWDG_RELOAD               = 4000U;   // ~8s @ 32kHz/64
 
 // ============================================================
 // KONFIGURACJA FLASH (W25Q128)
 // ============================================================
 constexpr uint16_t FLUSH_AFTER_WRITES        = 10;
 
-
 constexpr uint16_t GPS_BAUNDRATE             = 9600;
 constexpr uint16_t MAX_FILE_NUMBER           = 9999;
 constexpr float APOGEE_ALTITUDE_HYSTERESIS   = 1.0f;
-
-
-
-
-
-
-static_assert(MIN_PRESSURE < MAX_PRESSURE, "MIN_PRESSURE must be less than MAX_PRESSURE");
-static_assert(MIN_ALTITUDE < MAX_ALTITUDE, "MIN_ALTITUDE must be less than MAX_ALTITUDE");
-static_assert(MIN_TEMP < MAX_TEMP, "MIN_TEMP must be less than MAX_TEMP");
-static_assert(LAUNCH_ACCEL_THRESHOLD > 0.0f, "LAUNCH_ACCEL_THRESHOLD must be positive");
-static_assert(BURNOUT_ACCEL_THRESHOLD > 0.0f, "BURNOUT_ACCEL_THRESHOLD must be positive");
-static_assert(APOGEE_VELOCITY_THRESHOLD > 0.0f, "APOGEE_VELOCITY_THRESHOLD must be positive");
-static_assert(LANDING_VELOCITY_THRESHOLD > 0.0f, "LANDING_VELOCITY_THRESHOLD must be positive");
-static_assert(INTERVAL_FLIGHT > 0, "INTERVAL_FLIGHT must be positive");
-
-
-
-
-
 
 // DATA LEN AND POSITIONS
 // HEADER for 16 bits
@@ -350,5 +335,18 @@ constexpr uint16_t filteredRollLen                    = 8;
 constexpr uint16_t filteredPitchPos                   = (filteredRollPos + filteredRollLen);
 constexpr uint16_t filteredPitchLen                   = 8;
 // CHECKSUM for 8 bits
+
+
+
+static_assert(MIN_PRESSURE < MAX_PRESSURE, "MIN_PRESSURE must be less than MAX_PRESSURE");
+static_assert(MIN_ALTITUDE < MAX_ALTITUDE, "MIN_ALTITUDE must be less than MAX_ALTITUDE");
+static_assert(MIN_TEMP < MAX_TEMP, "MIN_TEMP must be less than MAX_TEMP");
+static_assert(LAUNCH_ACCEL_THRESHOLD > 0.0f, "LAUNCH_ACCEL_THRESHOLD must be positive");
+static_assert(BURNOUT_ACCEL_THRESHOLD > 0.0f, "BURNOUT_ACCEL_THRESHOLD must be positive");
+static_assert(APOGEE_VELOCITY_THRESHOLD > 0.0f, "APOGEE_VELOCITY_THRESHOLD must be positive");
+static_assert(LANDING_VELOCITY_THRESHOLD > 0.0f, "LANDING_VELOCITY_THRESHOLD must be positive");
+static_assert(INTERVAL_FLIGHT > 0, "INTERVAL_FLIGHT must be positive");
+constexpr uint16_t TOTAL_PACKET_BITS = filteredPitchPos + filteredPitchLen + 8U;
+static_assert(TOTAL_PACKET_BITS <= ARRAY_SIZE * 8U, "Packet too large for ARRAY_SIZE!");
 
 #endif  // CONFIG_H

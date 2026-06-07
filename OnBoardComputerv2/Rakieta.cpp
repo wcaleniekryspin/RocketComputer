@@ -1,6 +1,27 @@
 #include "Rakieta.h"
 
 
+/*
+  -"AIR VEHICLE C++ CODING STANDARDS FOR THE SYSTEM DEVELOPMENT AND DEMONSTRATION PROGRAM"
+
+  OGÓLNIE DO ZROBIENIA:
+    -zmienić nagłówek w flashOpenNewFile()
+
+    -dodać sprawdzanie headeru przychodzącej wiadomości
+    -Żadna funkcja nie ma dokumentacji w formacie wymaganym przez JSF (brief, param, return)
+    -dodać zapis logów na flash
+   
+  NA PÓŹNIEJ:
+    1. Użycie delay() w funkcjach inicjalizujących (AV Rule 131) występuje w: initGPS() – delay(500), setOffsets() – delay(25) i delay(200), systemSleep() – delay(time), transmit() – delay(1), handleSleepMode() – systemSleep(100) i systemSleep(5000)
+    10. Użycie delay()   -    W Rakieta.cpp wielokrotnie używane jest delay(): w setOffsets() delay(25) i delay(200), w initGPS() delay(500), w transmit() delay(1), w systemSleep() delay(time). delay() blokuje wykonanie całego programu na zadany czas, co w systemie czasu rzeczywistego jest niedopuszczalne – prowadzi do utraty danych z sensorów i braku reakcji na krytyczne zdarzenia. Należy zastąpić delay() nieblokującymi timerami opartymi na millis().
+    14. Ograniczone sprawdzanie zakresów danych   -    Dane z sensorów są używane w obliczeniach bez weryfikacji, czy są fizycznie możliwe. Na przykład w detectApogee() porównuje się data.bmp1.lastVerticalSpeed <= APOGEE_VELOCITY_THRESHOLD – ale jeśli lastVerticalSpeed jest NaN lub nieskończonością, wynik będzie nieprawidłowy. Należy przed każdym użyciem sprawdzać, czy wartość jest skończona i mieści się w oczekiwanym przedziale (np. isfinite()).
+    15. Brak jawnych timeoutów dla części operacji   -    Operacje odczytu z I2C, SPI czy GPS nie mają zdefiniowanych timeoutów. Na przykład gps.encode() czyta z bufora UART, ale jeśli dane przestaną napływać, program nie ma informacji o tym po czasie. W transmit() jest timeout dla LoRa, ale to wyjątek. Każda operacja, która może blokować, powinna mieć limit czasu, po którym zostaje przerwana, a komponent oznaczony jako uszkodzony.
+    20. Ograniczona przewidywalność czasowa   -    Użycie delay(), String, debug oraz blokujących operacji I2C/SPI powoduje, że czas wykonania funkcji jest nieokreślony. W systemie czasu rzeczywistego wymagana jest analiza najgorszego czasu wykonania (WCET) i dowiedzenie, że wszystkie terminy są dotrzymane. Obecny kod nie daje żadnych gwarancji – np. handleBmp() może wykonać się szybko lub wolno w zależności od stanu czujnika.
+    21. Możliwe użycie funkcji niedeterministycznych   -    millis() jest zwykle deterministyczne, ale String alokuje pamięć, co może powodować nieprzewidywalne opóźnienia. Ponadto biblioteki Adafruit mogą wewnętrznie używać delay() lub pętli oczekujących, które nie mają gwarantowanego czasu. Standard JSF wymaga eliminacji wszystkich niedeterministycznych konstrukcji, a jeśli to niemożliwe – ścisłej kontroli.
+    24. Brak pełnej kontroli overflow/underflow   -    W obliczeniach całkujących (np. data.lsm.lastTotalSpeed += data.lsm.lastTotalAccel * dt) nie ma zabezpieczeń przed przekroczeniem zakresu float ani przed wartościami NaN. W systemie krytycznym po każdej operacji arytmetycznej należy sprawdzić, czy wynik jest skończony i mieści się w oczekiwanym przedziale, a w razie potrzeby nasycić wartość lub przejść w stan awaryjny.
+    28. Ograniczone logowanie diagnostyczne   -    W trybie FLIGHT logowane są tylko dane telemetryczne (flashWriteString), ale nie loguje się błędów, zmian stanów, timeoutów ani innych zdarzeń systemowych. W przypadku katastrofy brak logów uniemożliwi analizę przyczyny. System powinien zapisywać pełną diagnostykę (z timestampem) do pamięci nieulotnej, a w trybie DEBUG wysyłać przez Serial.
+*/
+
 volatile bool Rakieta::operationDone = false;
 
 // === Konstruktor ===
@@ -60,6 +81,7 @@ Rakieta::Rakieta():
   lora(&loraModule),
   
   // === Flash ===
+  summarySend(0),
   flashWriteCount(0),
   flashDataFile(),
   dumpFile(),
@@ -144,8 +166,6 @@ bool Rakieta::initADXL()
 
 bool Rakieta::initBMP1()
 {
-  bool ok = true;
-  
   if (bmp1.begin_SPI(CS_BMP1, &spiFast))
   {
     bmp1.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
@@ -185,9 +205,13 @@ bool Rakieta::initGPS()
   
   watchdog();
 
-  while (gpsSerial.available())
+  uint32_t gpsTimeout = millis() + 2000;
+  while (millis() < gpsTimeout)
   {
-    gps.encode(gpsSerial.read());
+    while (gpsSerial.available())
+    {
+      gps.encode(gpsSerial.read());
+    }
   }
   
   if (gps.charsProcessed() > 0)
@@ -206,11 +230,13 @@ void Rakieta::updateLeds(const uint32_t now)
   if (led1IsOn && led1OffTime < now)
   {
     digitalWrite(LED_1, LOW);
+    led1IsOn = false;
     debugf("[LED1] Updated");
   }
   if (led2IsOn && led2OffTime < now)
   {
     digitalWrite(LED_2, LOW);
+    led2IsOn = false;
     debugf("[LED2] Updated");
   }
 }
@@ -220,6 +246,7 @@ void Rakieta::updateBuzzer(const uint32_t now)
   if (buzzerIsOn && buzzerOffTime < now)
   {
     digitalWrite(BUZZER, LOW);
+    buzzerIsOn = false;
     debugf("[BUZZER] Updated");
   }
 }
@@ -229,12 +256,14 @@ void Rakieta::updateSolenoid(const uint32_t now)
   if (solenoid1IsOn && solenoid1OffTime < now)
   {
     digitalWrite(SOLENOID_1, LOW);
+    solenoid1IsOn = false;
     debugln("[SOLENOID1] Updated");
   }
   
   if (solenoid2IsOn && solenoid2OffTime < now)
   {
     digitalWrite(SOLENOID_2, LOW);
+    solenoid2IsOn = false;
     debugln("[SOLENOID2] Updated");
   }
 }
@@ -280,10 +309,11 @@ void Rakieta::printSystemMode() const
   debug("[SYSTEM MODE] ");
   switch (currentMode)
   {
-    case SystemMode::DEBUG:  debugln("DEBUG");  break;
-    case SystemMode::FLIGHT: debugln("FLIGHT"); break;
-    case SystemMode::DUMP:   debugln("DUMP");   break;
-    case SystemMode::SLEEP:  debugln("SLEEP");  break;
+    case SystemMode::DEBUG:  debugln("DEBUG");           break;
+    case SystemMode::FLIGHT: debugln("FLIGHT");          break;
+    case SystemMode::DUMP:   debugln("DUMP");            break;
+    case SystemMode::SLEEP:  debugln("SLEEP");           break;
+    default:                 debugln("!! INCORRECT !!"); break
   }
 }
 
@@ -292,12 +322,13 @@ void Rakieta::printFlightMode() const
   debug("[FLIGHT MODE] ");
   switch (currentFlightState)
   {
-    case FlightState::IDLE:    debugln("IDLE");     break;
-    case FlightState::BOOST:   debugln("BOOST");    break;
-    case FlightState::COAST:   debugln("COAST");    break;
-    case FlightState::APOGEE:  debugln("APOGEE");   break;
-    case FlightState::DESCENT: debugln("DESCENT");  break;
-    case FlightState::LANDED:  debugln("LANDED");   break;
+    case FlightState::IDLE:    debugln("IDLE");            break;
+    case FlightState::BOOST:   debugln("BOOST");           break;
+    case FlightState::COAST:   debugln("COAST");           break;
+    case FlightState::APOGEE:  debugln("APOGEE");          break;
+    case FlightState::DESCENT: debugln("DESCENT");         break;
+    case FlightState::LANDED:  debugln("LANDED");          break;
+    default:                   debugln("!! INCORRECT !!"); break
   }
 }
 
@@ -329,8 +360,6 @@ void Rakieta::handleLsm()
       return;
     }
 
-    uint32_t now = millis();
-
     data.lsm.ax = ax;
     data.lsm.ay = ay;
     data.lsm.az = az;
@@ -338,9 +367,11 @@ void Rakieta::handleLsm()
     data.lsm.gy = gy;
     data.lsm.gz = gz;
     data.lsm.temp = temp.temperature;
+
+    uint32_t now = millis();
+    float dt = (now - data.lsm.lastTime) / 1000.0f;
     data.lsm.lastTime = now;
 
-    float dt = (now - data.lsm.lastTime) / 1000.0f;
     if (dt > 0.1f) dt = 0.1f;
     else if (dt <= 0.0f) return;
     else if (dt > 0.001f)
@@ -372,14 +403,14 @@ void Rakieta::handleAdxl()
         return;
     }
 
-    uint32_t now = millis();
-    
     data.adxl.ax = ax;
     data.adxl.ay = ay;
     data.adxl.az = az;
-    data.adxl.lastTime = now;
     
+    uint32_t now = millis();
     float dt = (now - data.adxl.lastTime) / 1000.0f;
+    data.adxl.lastTime = now;
+  
     if (dt > 0.1f) dt = 0.1f;
     else if (dt <= 0.0f) return;
     else if (dt > 0.001f)
@@ -411,16 +442,16 @@ void Rakieta::handleBmp1()
     }
     else
     {
-      uint32_t now = millis();
-      
       data.bmp1.pressure = pressure;
       data.bmp1.altitude = altitude;
       data.bmp1.temp = temp;
-      data.bmp1.lastTime = now;
       
       if (data.bmp1.maxAltitude < altitude) data.bmp1.maxAltitude = altitude;
       
+      uint32_t now = millis();
       float dt = (now - data.bmp1.lastTime) / 1000.0f;
+      data.bmp1.lastTime = now;
+      
       if (dt > 0.1f) dt = 0.1f;
       else if (dt <= 0.0f) return;
       else if (dt > 0.001f)
@@ -452,16 +483,16 @@ void Rakieta::handleBmp2()
     }
     else
     {
-      uint32_t now = millis();
-      
       data.bmp2.pressure = pressure;
       data.bmp2.altitude = altitude;
       data.bmp2.temp = temp;
-      data.bmp2.lastTime = now;
       
       if (data.bmp2.maxAltitude < altitude) data.bmp2.maxAltitude = altitude;
       
+      uint32_t now = millis();
       float dt = (now - data.bmp2.lastTime) / 1000.0f;
+      data.bmp2.lastTime = now;
+      
       if (dt > 0.1f) dt = 0.1f;
       else if (dt <= 0.0f) return;
       else if (dt > 0.001f)
@@ -584,7 +615,7 @@ void Rakieta::printData() const
          data.filtered.ax, data.filtered.ay, data.filtered.az, data.filtered.gx, data.filtered.gy, data.filtered.gz);
   debugf("Filtered: Alti: %.2f m | Speed: %.2f m/s | Accel: %.3f m/s^2\n",
          data.filtered.alti, data.filtered.speed, data.filtered.accel);
-  debugf("Filtered: roll:%.2f pitch:%.2\n", data.filtered.roll, data.filtered.pitch);
+  debugf("Filtered: roll:%.2f pitch:%.2f\n", data.filtered.roll, data.filtered.pitch);
 
 }
 
@@ -610,6 +641,7 @@ void Rakieta::setOffsets()
     now = millis();
     if (now - lastOffestSensorsTime >= OFFSET_SENSORS_INTERVAL)
     {
+      lastOffestSensorsTime = now;
       sensors_event_t accel, gyro, temp;
       if (lsm.getEvent(&accel, &gyro, &temp))
       {
@@ -663,11 +695,12 @@ void Rakieta::setOffsets()
   num = OFFSETS_GPS_READ;
   uint32_t timeout = millis() + 30000;
 
-  while (offsets.gps.valid < num || now < timeout)
+  while (offsets.gps.valid < num && now < timeout)
   {
     now = millis();
     if (now - lastOffestGpsTime >= OFFSET_GPS_INTERVAL)
     {
+      lastOffestGpsTime = now;
       if (gps.location.isValid() && gps.altitude.isValid())
       {
         offsets.gps.lat += gps.location.lat();
@@ -686,7 +719,7 @@ void Rakieta::setOffsets()
   offsetsSet = true;
 }
 
-void Rakieta::prepareGpsOffset(char* buffer, size_t bufferSize)
+void Rakieta::prepareGpsOffset(char* buffer, const size_t bufferSize)
 {
   if (!offsetsSet) return;
   if (buffer == nullptr || bufferSize <= 0) return;
@@ -708,7 +741,7 @@ void Rakieta::prepareGpsOffset(char* buffer, size_t bufferSize)
   }
 }
 
-void Rakieta::prepareOffsetsMsg(char* buffer, size_t bufferSize)
+void Rakieta::prepareOffsetsMsg(char* buffer, const size_t bufferSize)
 {
   if (!offsetsSet) return;
   if (buffer == nullptr || bufferSize <= 0) return;
@@ -749,7 +782,7 @@ void Rakieta::prepareOffsetsMsg(char* buffer, size_t bufferSize)
   }
 }
 
-void Rakieta::prepareDataLineMsg(char* buffer, size_t bufferSize)
+void Rakieta::prepareDataLineMsg(char* buffer, const size_t bufferSize)
 {
   if (buffer == nullptr || bufferSize <= 0) return;
 
@@ -823,7 +856,7 @@ void Rakieta::calculateOrientation()
 }
 
 void Rakieta::filterAccel()
-{
+{ && (millis() - data.lsm.lastTime) < 500U
   float fusedAx = 0.0f, fusedAy = 0.0f, fusedAz = 0.0f;
   float totalWeight = 0.0f;
   float mach = data.filtered.speed / SPEED_OF_SOUND;
@@ -843,7 +876,7 @@ void Rakieta::filterAccel()
   }
 
   // ADXL
-  if (!(errorFlags & ADXL_ERROR))
+  if (!(errorFlags & ADXL_ERROR) )
   {
     float weight = WEIGHT_ADXL_ACCEL;
     if (fabs(data.adxl.ax) <= ADXL_MAX_G && fabs(data.adxl.ay) <= ADXL_MAX_G && fabs(data.adxl.az) <= ADXL_MAX_G)
@@ -877,12 +910,12 @@ void Rakieta::filterSpeed()
   // Barometry (tylko jeśli mach < 0.9)
   if (mach < MACH_IGNORE_BARO)
   {
-    if (!(errorFlags & BMP1_ERROR) && !isnan(data.bmp1.lastVerticalSpeed))
+    if (!(errorFlags & BMP1_ERROR) && !isnan(data.bmp1.lastVerticalSpeed) && (millis() - data.bmp1.lastTime) < 500U)
     {
       fusedSpeed += fabs(data.bmp1.lastVerticalSpeed) * WEIGHT_BMP_SPEED;
       totalWeight += WEIGHT_BMP_SPEED;
     }
-    if (!(errorFlags & BMP2_ERROR) && !isnan(data.bmp2.lastVerticalSpeed))
+    if (!(errorFlags & BMP2_ERROR) && !isnan(data.bmp2.lastVerticalSpeed) && (millis() - data.bmp2.lastTime) < 500U)
     {
       fusedSpeed += fabs(data.bmp2.lastVerticalSpeed) * WEIGHT_BMP_SPEED;
       totalWeight += WEIGHT_BMP_SPEED;
@@ -890,14 +923,14 @@ void Rakieta::filterSpeed()
   }
   
   // LSM (zawsze, chyba że błąd)
-  if (!(errorFlags & LSM_ERROR) && !isnan(data.lsm.lastTotalSpeed))
+  if (!(errorFlags & LSM_ERROR) && !isnan(data.lsm.lastTotalSpeed) && (millis() - data.lsm.lastTime) < 500U)
   {
     fusedSpeed += data.lsm.lastTotalSpeed * WEIGHT_LSM_SPEED;
     totalWeight += WEIGHT_LSM_SPEED;
   }
 
   // ADXL (zawsze, chyba że błąd)
-  if (!(errorFlags & ADXL_ERROR) && !isnan(data.adxl.lastTotalSpeed))
+  if (!(errorFlags & ADXL_ERROR) && !isnan(data.adxl.lastTotalSpeed) && (millis() - data.adxl.lastTime) < 500U)
   {
     fusedSpeed += data.adxl.lastTotalSpeed * WEIGHT_ADXL_SPEED;
     totalWeight += WEIGHT_ADXL_SPEED;
@@ -940,14 +973,14 @@ void Rakieta::filterAlti()
   }
 
   // LSM (wysokość całkowana, jeśli dostępna)
-  if (!(errorFlags & LSM_ERROR) && !isnan(data.lsm.lastTotalAlti))
+  if (!(errorFlags & LSM_ERROR) && !isnan(data.lsm.lastTotalAlti) && (millis() - data.lsm.lastTime) < 500U)
   {
     fusedAlti += data.lsm.lastTotalAlti * WEIGHT_LSM_ALTI;
     totalWeight += WEIGHT_LSM_ALTI;
   }
 
   // ADXL (wysokość całkowana, jeśli dostępna)
-  if (!(errorFlags & ADXL_ERROR) && !isnan(data.adxl.lastTotalAlti))
+  if (!(errorFlags & ADXL_ERROR) && !isnan(data.adxl.lastTotalAlti) && (millis() - data.adxl.lastTime) < 500U)
   {
     fusedAlti += data.adxl.lastTotalAlti * WEIGHT_ADXL_ALTI;
     totalWeight += WEIGHT_ADXL_ALTI;
@@ -989,12 +1022,10 @@ bool Rakieta::initLora()
 
 void Rakieta::setOperationFlag()
 {
-  __disable_irq();
   operationDone = true;
-  __enable_irq();
 }
 
-void Rakieta::prepareLoraStatusMsg(char* buffer, size_t bufferSize)
+void Rakieta::prepareLoraStatusMsg(char* buffer, const size_t bufferSize)
 {
   if (buffer == nullptr || bufferSize <= 0) return;
 
@@ -1019,6 +1050,8 @@ void Rakieta::prepareLoraStatusMsg(char* buffer, size_t bufferSize)
 
 void Rakieta::preparePacket()
 {
+  message.clean();
+
   uint32_t now = millis();
   // HEADER jest dodawany automatycznie
   message.add(uint32_t(now / 10), timePos, timeLen);
@@ -1116,7 +1149,6 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
   if (msg == nullptr || len == 0 || len > 255) return;
 
   __disable_irq();
-  operationDone = false;
 
   if (!operationDone)
   {
@@ -1125,7 +1157,6 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
       debugln("ERROR: LoRa timeout, forcing radio reset");
       lora.standby();
       startListening();
-      operationDone = true;
     }
     else
     {
@@ -1135,12 +1166,14 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
     }
   }
   
+  operationDone = false;
+
   debug(F("Sending: "));
   Serial.write(msg, len);
   debugln();
 
   loraMsgStartTime = millis();
-  int16_t state = lora.startTransmit(reinterpret_cast<const uint8_t*>(msg), len);
+  int16_t state = lora.startTransmit(msg, len);
 
   if (state != RADIOLIB_ERR_NONE)
   {
@@ -1153,10 +1186,12 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
   __enable_irq();
 }
 
-void Rakieta::transmit(const char* msg, size_t len)
+void Rakieta::transmit(const char* msg, const size_t len)
 {
   if (msg == nullptr) return;
-  transmit(reinterpret_cast<const uint8_t*>(msg), len);
+  uint8_t buf[256];
+  memcpy(buf, msg, len);
+  transmit(buf, len);
 }
 
 void Rakieta::startListening()
@@ -1185,36 +1220,36 @@ void Rakieta::handleCommand(const char* command)
   char* arg = strtok(nullptr, " ");
   
   // Użycie strcmp do porównywania napisów
-  if (strcmp(command, "RESET") == 0) { systemReset(); }
-  else if (strcmp(command, "RESET_OFFSETS") == 0) { resetOffsets(); }
-  else if (strcmp(command, "SET_OFFSETS") == 0) { setOffsets(); }
-  else if (strcmp(command, "GET_RAW_DATA") == 0) { readSensorsData(); sendPacket(); }
-  else if (strcmp(command, "INIT_WATCHDOG") == 0) { initWatchdog(); }
+  if (strcmp(cmd, "RESET") == 0) { systemReset(); }
+  else if (strcmp(cmd, "RESET_OFFSETS") == 0) { resetOffsets(); }
+  else if (strcmp(cmd, "SET_OFFSETS") == 0) { setOffsets(); }
+  else if (strcmp(cmd, "GET_RAW_DATA") == 0) { readSensorsData(); sendPacket(); }
+  else if (strcmp(cmd, "INIT_WATCHDOG") == 0) { initWatchdog(); }
   else if (strcmp(cmd, "DEPLOY_DROGUE") == 0) { drogueParashuteOpen(); }
   else if (strcmp(cmd, "DEPLOY_MAIN") == 0) { mainParashuteOpen(); }
   else if (strcmp(cmd, "VERSION") == 0) { debugln("Rocket v1.0"); transmit("Rocket v1.0", 11); }
-  else if (strcmp(command, "GET_GPS_OFFSET") == 0)
+  else if (strcmp(cmd, "GET_GPS_OFFSET") == 0)
   {
     char offBuf[128];
     prepareGpsOffset(offBuf, sizeof(offBuf));
     debugln(offBuf);
     transmit(offBuf, sizeof(offBuf));
   }
-  else if (strcmp(command, "GET_OFFSETS") == 0)
+  else if (strcmp(cmd, "GET_OFFSETS") == 0)
   {
     char offBuf[256];
     prepareOffsetsMsg(offBuf, sizeof(offBuf));
     debugln(offBuf);
     transmit(offBuf, sizeof(offBuf));
   }
-  else if (strcmp(command, "GET_LORA_STATUS") == 0)
+  else if (strcmp(cmd, "GET_LORA_STATUS") == 0)
   {
     char offBuf[128];
     prepareLoraStatusMsg(offBuf, sizeof(offBuf));
     debugln(offBuf);
     transmit(offBuf, sizeof(offBuf));
   }
-  else if (strcmp(command, "GET_DATA") == 0)
+  else if (strcmp(cmd, "GET_DATA") == 0)
   {
     char dataBuf[1024];
     prepareDataLineMsg(dataBuf, sizeof(dataBuf));
@@ -1314,7 +1349,10 @@ void Rakieta::checkRadio()
 
   if (state == RADIOLIB_ERR_NONE)
   {
-    buffer[state] = '\0';
+    size_t len = lora.getPacketLength();
+    if (len < sizeof(buffer)) buffer[len] = '\0';
+    else buffer[sizeof(buffer) - 1] = '\0';
+
     char logBuf[128];
 
     snprintf(logBuf, sizeof(logBuf), "RX: %s | RSSI=%.1f SNR=%.1f", reinterpret_cast<char*>(buffer), lora.getRSSI(), lora.getSNR());
@@ -1334,24 +1372,44 @@ void Rakieta::checkRadio()
     debugln(state);
     errorFlags |= LORA_ERROR;
   }
+  startListening();
 }
 
 bool Rakieta::initFlash()
 {
-  if (flash.begin())
+  if (!flash.begin())
   {
-    uint32_t jedec = flash.getJEDECID();
-    debug("[FLASH] OK, JEDEC: 0x");
-    debugHex(jedec);
-    errorFlags &= ~FLASH_ERROR;
-    return true;
+    debugln("[FLASH] BRAK ODPOWIEDZI");
+    errorFlags |= FLASH_ERROR;
+    return false;
   }
-  debugln("[FLASH] BRAK ODPOWIEDZI");
-  errorFlags |= FLASH_ERROR;
-  return false;
+
+  uint32_t jedec = flash.getJEDECID();
+  debug("[FLASH] OK, JEDEC: 0x");
+  debugHex(jedec);
+  debugln();
+
+  if (!fatfs.begin(&flash))
+  {
+    debugln("[FLASH] FAT mount failed. Attempting format...");
+    watchdog();
+    if (!fatfs.begin(&flash, true))
+    {
+      debugln("[FLASH] Format failed!");
+      errorFlags |= FLASH_ERROR;
+      return false;
+    }
+    debugln("[FLASH] Format successful.");
+    watchdog();
+  }
+
+  debugln("[FLASH] FAT mounted OK");
+
+  errorFlags &= ~FLASH_ERROR;
+  return true;
 }
 
-bool Rakieta::flashFindNextFileNumber(char* fileName, size_t bufferSize)
+bool Rakieta::flashFindNextFileNumber(char* fileName, const size_t bufferSize)
 {
   if (fileName == nullptr || bufferSize < 14) return false;
   
@@ -1517,46 +1575,6 @@ void Rakieta::flashCloseFile()
   }
 }
 
-bool Rakieta::flashRecoverAfterReset()
-{
-  if (!fatfs.begin(&flash))
-  {
-    debugln("[FLASH] Mount failed. Attempting format...");
-    if (!fatfs.begin(&flash, true))
-    {
-      debugln("[FLASH] Format failed!");
-      errorFlags |= FLASH_ERROR;
-      return false;
-    }
-    debugln("[FLASH] Format successful.");
-    watchdog();
-  }
-
-  uint16_t maxNumber = findMaxFileNumber();
-
-  char filename[32];
-  snprintf(filename, sizeof(filename), "data_%04d.csv", maxNumber);
-
-  flashDataFile = fatfs.open(filename, FILE_WRITE);
-  if (!flashDataFile)
-  {
-    flashDataFile = fatfs.open(filename, FILE_WRITE | O_CREAT | O_APPEND);
-    if (!flashDataFile)
-    {
-      debugln("[FLASH] Cannot open/create file for recovery!");
-      return false;
-    }
-  }
-  watchdog();
-
-  flashDataFile.seekEnd();
-  flashDataFile.println("\n--- RECOVERY AFTER RESET ---");
-  flashDataFile.flush();
-  watchdog();
-  debugf("[FLASH] Recovery OK. File: %s\n", filename);
-  return true;
-}
-
 void Rakieta::flashDumpFileList()
 {
   debugln("\n=== FLASH FILE LIST ===");
@@ -1692,7 +1710,7 @@ bool Rakieta::detectLanding()
 {
   if (isnan(data.filtered.speed) || isinf(data.filtered.speed) || !isfinite(data.filtered.speed)) return false;
 
-  if (abs(data.filtered.speed) < LANDING_VELOCITY_THRESHOLD)
+  if (fabs(data.filtered.speed) < LANDING_VELOCITY_THRESHOLD)
   {
     uint32_t now = millis();
     if (landedDetectTime == 0) landedDetectTime = now;
@@ -1703,7 +1721,7 @@ bool Rakieta::detectLanding()
   return false;
 }
 
-bool Rakieta::checkDeploymentConditions(const ParachuteType type)
+bool Rakieta::checkDeploymentConditions(const ParachuteType type) const
 {
   if (type == ParachuteType::DROGUE)
   {
@@ -1789,7 +1807,7 @@ void Rakieta::updateFlightState()
     }
     case FlightState::APOGEE:
     {
-      if ((!drogueDeployed && (checkDeploymentConditions(ParachuteType::DROGUE)) || (millis() - launchDetectTime > DROGUE_PARASHUTE_TIMEOUT)))
+      if (!drogueDeployed && (checkDeploymentConditions(ParachuteType::DROGUE) || (millis() - launchDetectTime > DROGUE_PARASHUTE_TIMEOUT)))
       {
         drogueParashuteOpen();
         drogueDeployed = true;
@@ -1818,8 +1836,12 @@ void Rakieta::updateFlightState()
       break;
     }
     case FlightState::LANDED:
-      sendFlightSummary();
-      inFlight = false;
+      if (summarySend < 5)
+      {
+        sendFlightSummary();
+        inFlight = false;
+        summarySend++;
+      }
       flashCloseFile();
       break;
 
@@ -1830,12 +1852,16 @@ void Rakieta::updateFlightState()
 
 void Rakieta::initWatchdog()
 {
+  static bool watchdogInitialized = false;
+  if (watchdogInitialized) return;
+
   // Włącz watchdog z timeoutem ~8 sekund (LSI ~32 kHz, preskaler 64, reload 4000)
-  IWDG1->KR = 0x5555;   // odblokowanie dostępu do rejestrów
-  IWDG1->PR = 4;        // preskaler 64 (2^4 = 64)
-  IWDG1->RLR = 4000;    // reload value
-  IWDG1->KR = 0xAAAA;   // odświeżenie (wymagane przed uruchomieniem)
-  IWDG1->KR = 0xCCCC;   // uruchomienie
+  IWDG1->KR = IWDG_KEY_UNLOCK;    // odblokowanie dostępu do rejestrów
+  IWDG1->PR = IWDG_PRESCALER;     // preskaler 64 (2^4 = 64)
+  IWDG1->RLR = IWDG_RELOAD;       // reload value
+  IWDG1->KR = IWDG_KEY_REFRESH;   // odświeżenie (wymagane przed uruchomieniem)
+  IWDG1->KR = IWDG_KEY_START;     // uruchomienie
+  watchdogInitialized = true;
 }
 
 void Rakieta::watchdog()
@@ -1845,7 +1871,7 @@ void Rakieta::watchdog()
   uint32_t now = millis();
   if (now - lastWatchdogTime >= WATCHDOG_INTERVAL)
   {
-    IWDG1->KR = 0xAAAA;
+    IWDG1->KR = IWDG_KEY_REFRESH;
     lastWatchdogTime = now;
   }
 }
@@ -1975,6 +2001,7 @@ void Rakieta::handleDumpMode(const uint32_t now)
     debugln("3. Wypisz zawartość ostatniego pliku");
     debug("Wybierz opcję (1-3): ");
   }
+  watchdog();
 
   // Odczyt komendy z Serial (tylko gdy oczekujemy)
   if (state == WAITING_FOR_COMMAND && Serial.available())
@@ -2022,6 +2049,7 @@ void Rakieta::handleDumpMode(const uint32_t now)
           buf[idx++] = c;
       }
       delay(5);
+      watchdog();
     }
 
     uint16_t fileNumber = atoi(buf);
@@ -2040,6 +2068,7 @@ void Rakieta::handleDumpMode(const uint32_t now)
     state = WAITING_FOR_COMMAND;
     lastMenuPrint = 0;
   }
+  watchdog();
 }
 
 void Rakieta::handleSleepMode(const uint32_t now)
@@ -2100,6 +2129,8 @@ void Rakieta::handleMode(const uint32_t now)
         handleSleepMode(now);
       }
       break;
+    default:
+      break;
   }
 }
 
@@ -2117,7 +2148,6 @@ void Rakieta::init()
   initGPS();
   initLora();
   initFlash();
-  flashRecoverAfterReset();
 
   setSystemMode();
   printSystemMode();
