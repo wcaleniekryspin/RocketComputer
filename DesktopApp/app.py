@@ -187,7 +187,6 @@ class RocketGroundStation:
         self.data_queue = queue.Queue()
         self.running = True
         self.telemetry_data = {}
-        self.history = defaultdict(lambda: deque(maxlen=500))
         self.packet_counter = 0
         self.last_rocket_packet = -1
         self.lost_packets = 0
@@ -201,8 +200,9 @@ class RocketGroundStation:
 
         # Kontrola odświeżania wykresów
         self.last_plot_update = 0
-        self.plot_update_interval = 50  # ms
-        self.points_limit = 1500
+        self.plot_update_interval = 500  # ms
+        self.points_limit = 1000
+        self.history = defaultdict(lambda: deque(maxlen=self.points_limit))
 
         # Główny kontener z przewijaniem
         self.main_canvas = tk.Canvas(self.root, highlightthickness=0)
@@ -257,41 +257,10 @@ class RocketGroundStation:
         self.ax_alt = self.fig.add_subplot(2, 2, 3)
         self.ax_press_temp = self.fig.add_subplot(2, 2, 4)
 
-        # Konfiguracja osi
-        for ax, title in zip([self.ax_acc, self.ax_vel, self.ax_alt],
-                             ["Przyspieszenie", "Prędkość", "Wysokość"]):
-            ax.set_xlabel("Paczka")
-            ax.grid(True, alpha=0.3)
-            ax.set_title(title)
-        self.ax_acc.set_ylabel("m/s²")
-        self.ax_vel.set_ylabel("m/s")
-        self.ax_alt.set_ylabel("m")
-
-        # Wykres ciśnienia + temperatury (druga oś Y)
-        self.ax_press_temp.set_title("Ciśnienie i Temperatura")
-        self.ax_press_temp.set_xlabel("Paczka")
-        self.ax_press_temp.set_ylabel("hPa", color='blue')
-        self.ax_press_temp.tick_params(axis='y', labelcolor='blue')
-        self.ax_press_temp.grid(True, alpha=0.3)
-
         self.ax_temp = self.ax_press_temp.twinx()
         self.ax_temp.set_ylabel("°C", color='red')
         self.ax_temp.tick_params(axis='y', labelcolor='red')
-
-        self.ax_acc.set_title("Przyspieszenie")
-        self.ax_acc.set_ylabel("m/s²")
-        self.ax_vel.set_title("Prędkość")
-        self.ax_vel.set_ylabel("m/s")
-        self.ax_alt.set_title("Wysokość")
-        self.ax_alt.set_ylabel("m")
-        for ax in [self.ax_acc, self.ax_vel, self.ax_alt, self.ax_press_temp]:
-            ax.set_xlabel("Paczka")
-            ax.grid(True, alpha=0.3)
-        self.ax_press_temp.set_title("Ciśnienie i Temperatury")
-        self.ax_press_temp.set_ylabel("hPa", color='blue')
-        self.ax_press_temp.tick_params(axis='y', labelcolor='blue')
-        self.ax_temp.set_ylabel("°C", color='red')
-        self.ax_temp.tick_params(axis='y', labelcolor='red')
+        self.ax_temp.yaxis.set_label_position("right")
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=plots_frame)
         self.canvas.draw()
@@ -413,7 +382,7 @@ class RocketGroundStation:
         log_frame = ttk.LabelFrame(self.scrollable_frame, text="Log zdarzeń", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, font=('Courier', 9), wrap=tk.WORD)
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=12, font=('Courier', 9), wrap=tk.WORD)
         self.log_text.pack(fill=tk.BOTH, expand=True)
         self.log_text.tag_config('error', foreground='red')
         self.log_text.tag_config('warning', foreground='orange')
@@ -438,6 +407,13 @@ class RocketGroundStation:
         baud_combo = ttk.Combobox(control_frame, textvariable=self.baud_var, values=["9600", "19200", "38400", "57600", "115200"], width=8)
         baud_combo.pack(side=tk.LEFT, padx=5)
 
+        def refresh_ports():
+            ports = [port.device for port in serial.tools.list_ports.comports()]
+            self.port_combo['values'] = ports
+            if ports:
+                self.port_combo.set(ports[0])
+
+        ttk.Button(control_frame, text="Odśwież", command=refresh_ports).pack(side=tk.LEFT, padx=5)
         self.connect_btn = ttk.Button(control_frame, text="Połącz", command=self.toggle_connection)
         self.connect_btn.pack(side=tk.LEFT, padx=10)
 
@@ -736,14 +712,28 @@ class RocketGroundStation:
             return
         self.telemetry_data.update(data)
         packet_num = int(data.get('packet', 0))
+
+        if self.last_rocket_packet != -1 and packet_num < self.last_rocket_packet and (
+                self.last_rocket_packet - packet_num) > 100:
+            self.log(
+                f"WYKRYTO RESET: oczekiwano {self.last_rocket_packet + 1}, odebrano {packet_num} - resetuję licznik",
+                'warning')
+            self.last_rocket_packet = -1
+            self.lost_packets = 0
+            self.packet_counter = 0
+
         if self.last_rocket_packet == -1:
             self.last_rocket_packet = packet_num
         else:
             expected = (self.last_rocket_packet + 1) & 0xFFFF
             if packet_num != expected:
                 lost = (packet_num - expected) & 0xFFFF
-                self.lost_packets += lost
-                self.log(f"STRATA: oczekiwano {expected}, odebrano {packet_num} (strata {lost})", 'warning')
+                if lost < 1000:
+                    self.lost_packets += lost
+                    self.log(f"STRATA: oczekiwano {expected}, odebrano {packet_num} (strata {lost})", 'warning')
+                else:
+                    self.log(f"SKOK NUMERU: oczekiwano {expected}, odebrano {packet_num} (zignorowano)", 'warning')
+
         self.last_rocket_packet = packet_num
         self.packet_counter += 1
         self.update_packet_info()
@@ -782,7 +772,7 @@ class RocketGroundStation:
                     flight_map = {0: "IDLE", 1: "BOOST", 2: "COAST", 3: "APOGEE", 4: "DESCENT", 5: "LANDED"}
                     text = flight_map.get(int(val), str(val))
                 elif name in ('drogueParachute', 'mainParachute'):
-                    text = 'OPEN' if val == 1 else 'CLOSED'
+                    text = 'DEPLOYED' if val == 1 else 'CLOSED'
                 elif isinstance(val, float):
                     if name in ('time', 'battery'):
                         text = f"{val:.2f}"
@@ -864,7 +854,7 @@ class RocketGroundStation:
                     if pts:
                         x, y = zip(*pts)
                         color = color_map.get(key, 'gray')
-                        self.ax_acc.scatter(x, y, label=f"{prefix.upper()}-{axis}", alpha=0.7, s=2, color=color)
+                        self.ax_acc.plot(x, y, 'o', label=f"{prefix.upper()}-{axis}", alpha=0.7, markersize=1, color=color)
         for axis in ['X', 'Y', 'Z']:
             key = f"filteredAccel{axis}"
             if key in self.history:
@@ -872,7 +862,7 @@ class RocketGroundStation:
                 if pts:
                     x, y = zip(*pts)
                     color = color_map.get(key, 'purple')
-                    self.ax_acc.scatter(x, y, label=f"filt-{axis}", s=2, color=color)
+                    self.ax_acc.plot(x, y, 'o', label=f"filt-{axis}", markersize=2, color=color)
         self.ax_acc.legend(loc='upper left', fontsize=7)
 
         # Prędkość
@@ -884,7 +874,7 @@ class RocketGroundStation:
                     x, y = zip(*pts)
                     alpha = 0.7 if 'filtered' not in key else 1.0
                     color = color_map.get(key, 'gray')
-                    self.ax_vel.scatter(x, y, label=key.replace('Speed', ''), alpha=alpha, s=2, color=color)
+                    self.ax_vel.plot(x, y, 'o', label=key.replace('Speed', ''), alpha=alpha, markersize=1, color=color)
         self.ax_vel.legend(loc='upper left', fontsize=7)
 
         # Wysokość
@@ -896,7 +886,7 @@ class RocketGroundStation:
                     x, y = zip(*pts)
                     alpha = 0.7 if 'filtered' not in key else 1.0
                     color = color_map.get(key, 'gray')
-                    self.ax_alt.scatter(x, y, label=key.replace('Alti', ''), alpha=alpha, s=2, color=color)
+                    self.ax_alt.plot(x, y, 'o', label=key.replace('Alti', ''), alpha=alpha, markersize=1, color=color)
         self.ax_alt.legend(loc='upper left', fontsize=7)
 
         # Ciśnienie i temperatura
@@ -906,7 +896,7 @@ class RocketGroundStation:
                 if pts:
                     x, y = zip(*pts)
                     color = color_map.get(key, 'blue')
-                    self.ax_press_temp.scatter(x, y, label=key, color=color, s=3)
+                    self.ax_press_temp.plot(x, y, 'o', label=key, color=color, markersize=1)
 
         # Czyść oś temperatury (ale nie usuwaj etykiety i tytułu – są ustawione w setup_gui)
         self.ax_temp.clear()
@@ -917,7 +907,7 @@ class RocketGroundStation:
                 if pts:
                     x, y = zip(*pts)
                     color = color_map.get(key, 'red')
-                    self.ax_temp.scatter(x, y, label=key, color=color, s=3)
+                    self.ax_temp.plot(x, y, 'o', label=key, color=color, markersize=1)
 
         # Legenda dla ciśnienia/temperatury
         lines1, labels1 = self.ax_press_temp.get_legend_handles_labels()
