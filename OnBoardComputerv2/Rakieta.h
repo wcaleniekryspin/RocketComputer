@@ -20,14 +20,6 @@
 #include <BitStorage.h>
 #include "config.h"
 
-/*
-  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/OnBoardComputerv2.ino
-  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/Rakieta.h
-  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/Rakieta.cpp
-  https://github.com/wcaleniekryspin/OnBoardComputerV2/blob/main/OnBoardComputerv2/config.h
-*/
-
-
 
 class Rakieta
 {
@@ -203,7 +195,6 @@ private:
   // === Zarządzanie czasem ===
   uint32_t lastFlightModeLoop;
 
-
   void initGPIO();  // Inicjalizacja pinów GPIO, diod, buzzerów, solenoidów, DIP switch
   void initSPI();  // Inicjalizacja trzech magistral SPI (flash, LoRa, sensory)
   bool initLSM();  // Inicjalizacja czujnika LSM6DS (akcelerometr + żyroskop)
@@ -287,7 +278,6 @@ private:
   void handleDumpMode(const uint32_t);  // Główna pętla dla trybu DUMP
   void handleSleepMode(const uint32_t);  // Główna pętla dla trybu SLEEP + możliwość wybudzenia przez DIP switch
   void handleMode(const uint32_t);  // Dystrybutor wywołujący odpowiednią funkcję `handleXXXMode()` z odpowiednim interwałem
-
 
 public:
   Rakieta();

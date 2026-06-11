@@ -3,28 +3,13 @@
 
 /*
   -"AIR VEHICLE C++ CODING STANDARDS FOR THE SYSTEM DEVELOPMENT AND DEMONSTRATION PROGRAM"
-
-  OGÓLNIE DO ZROBIENIA:
-    -zmienić nagłówek w flashOpenNewFile()
-
-    -dodać sprawdzanie headeru przychodzącej wiadomości
-    -Żadna funkcja nie ma dokumentacji w formacie wymaganym przez JSF (brief, param, return)
-    -dodać zapis logów na flash
-   
-  NA PÓŹNIEJ:
-    1. Użycie delay() w funkcjach inicjalizujących (AV Rule 131) występuje w: initGPS() – delay(500), setOffsets() – delay(25) i delay(200), systemSleep() – delay(time), transmit() – delay(1), handleSleepMode() – systemSleep(100) i systemSleep(5000)
-    10. Użycie delay()   -    W Rakieta.cpp wielokrotnie używane jest delay(): w setOffsets() delay(25) i delay(200), w initGPS() delay(500), w transmit() delay(1), w systemSleep() delay(time). delay() blokuje wykonanie całego programu na zadany czas, co w systemie czasu rzeczywistego jest niedopuszczalne – prowadzi do utraty danych z sensorów i braku reakcji na krytyczne zdarzenia. Należy zastąpić delay() nieblokującymi timerami opartymi na millis().
-    14. Ograniczone sprawdzanie zakresów danych   -    Dane z sensorów są używane w obliczeniach bez weryfikacji, czy są fizycznie możliwe. Na przykład w detectApogee() porównuje się data.bmp1.lastVerticalSpeed <= APOGEE_VELOCITY_THRESHOLD – ale jeśli lastVerticalSpeed jest NaN lub nieskończonością, wynik będzie nieprawidłowy. Należy przed każdym użyciem sprawdzać, czy wartość jest skończona i mieści się w oczekiwanym przedziale (np. isfinite()).
-    15. Brak jawnych timeoutów dla części operacji   -    Operacje odczytu z I2C, SPI czy GPS nie mają zdefiniowanych timeoutów. Na przykład gps.encode() czyta z bufora UART, ale jeśli dane przestaną napływać, program nie ma informacji o tym po czasie. W transmit() jest timeout dla LoRa, ale to wyjątek. Każda operacja, która może blokować, powinna mieć limit czasu, po którym zostaje przerwana, a komponent oznaczony jako uszkodzony.
-    20. Ograniczona przewidywalność czasowa   -    Użycie delay(), String, debug oraz blokujących operacji I2C/SPI powoduje, że czas wykonania funkcji jest nieokreślony. W systemie czasu rzeczywistego wymagana jest analiza najgorszego czasu wykonania (WCET) i dowiedzenie, że wszystkie terminy są dotrzymane. Obecny kod nie daje żadnych gwarancji – np. handleBmp() może wykonać się szybko lub wolno w zależności od stanu czujnika.
-    21. Możliwe użycie funkcji niedeterministycznych   -    millis() jest zwykle deterministyczne, ale String alokuje pamięć, co może powodować nieprzewidywalne opóźnienia. Ponadto biblioteki Adafruit mogą wewnętrznie używać delay() lub pętli oczekujących, które nie mają gwarantowanego czasu. Standard JSF wymaga eliminacji wszystkich niedeterministycznych konstrukcji, a jeśli to niemożliwe – ścisłej kontroli.
-    24. Brak pełnej kontroli overflow/underflow   -    W obliczeniach całkujących (np. data.lsm.lastTotalSpeed += data.lsm.lastTotalAccel * dt) nie ma zabezpieczeń przed przekroczeniem zakresu float ani przed wartościami NaN. W systemie krytycznym po każdej operacji arytmetycznej należy sprawdzić, czy wynik jest skończony i mieści się w oczekiwanym przedziale, a w razie potrzeby nasycić wartość lub przejść w stan awaryjny.
-    28. Ograniczone logowanie diagnostyczne   -    W trybie FLIGHT logowane są tylko dane telemetryczne (flashWriteString), ale nie loguje się błędów, zmian stanów, timeoutów ani innych zdarzeń systemowych. W przypadku katastrofy brak logów uniemożliwi analizę przyczyny. System powinien zapisywać pełną diagnostykę (z timestampem) do pamięci nieulotnej, a w trybie DEBUG wysyłać przez Serial.
 */
 
 volatile bool Rakieta::operationDone = false;
 
-// === Konstruktor ===
+/**
+ * @brief Default constructor. Initializes all member variables to default values.
+ */
 Rakieta::Rakieta():
   // === Zmienne stanu ===
   currentMode(SystemMode::DEBUG),
@@ -94,6 +79,9 @@ Rakieta::Rakieta():
 {
 }
 
+/**
+ * @brief Destructor. Clears LoRa DIO1 action and closes flash file if open.
+ */
 Rakieta::~Rakieta()
 {
   lora.clearDio1Action();
@@ -101,6 +89,10 @@ Rakieta::~Rakieta()
   if (flashDataFile.isOpen()) flashCloseFile();
 }
 
+/**
+ * @brief Initializes GPIO pins for LEDs, buzzer, solenoids, battery read and DIP switches.
+ * @return void
+ */
 void Rakieta::initGPIO()
 {
   pinMode(LED_1, OUTPUT);
@@ -125,6 +117,10 @@ void Rakieta::initGPIO()
   debugln("[DIP SWITCH] OK");
 }
 
+/**
+ * @brief Initializes SPI interfaces for flash, LoRa and fast sensors.
+ * @return void
+ */
 void Rakieta::initSPI()
 {
   spiFlash.begin();
@@ -137,6 +133,10 @@ void Rakieta::initSPI()
   debugln("[SPI_CZUJNIKI] OK");
 }
 
+/**
+ * @brief Initializes LSM6DSO sensor via SPI.
+ * @return true if initialization succeeded, false otherwise.
+ */
 bool Rakieta::initLSM()
 {
   if (lsm.begin_SPI(CS_LSM, &spiFast))
@@ -150,6 +150,10 @@ bool Rakieta::initLSM()
   return false;
 }
 
+/**
+ * @brief Initializes ADXL375 sensor via SPI.
+ * @return true if initialization succeeded, false otherwise.
+ */
 bool Rakieta::initADXL()
 {
   if (adxl.begin())
@@ -164,6 +168,10 @@ bool Rakieta::initADXL()
   return false;
 }
 
+/**
+ * @brief Initializes first BMP388 sensor via SPI.
+ * @return true if initialization succeeded, false otherwise.
+ */
 bool Rakieta::initBMP1()
 {
   if (bmp1.begin_SPI(CS_BMP1, &spiFast))
@@ -181,6 +189,10 @@ bool Rakieta::initBMP1()
   return false;
 }
 
+/**
+ * @brief Initializes second BMP388 sensor via SPI.
+ * @return true if initialization succeeded, false otherwise.
+ */
 bool Rakieta::initBMP2()
 {
   if (bmp2.begin_SPI(CS_BMP2, &spiFast))
@@ -198,6 +210,10 @@ bool Rakieta::initBMP2()
   return false;
 }
 
+/**
+ * @brief Initializes GPS module over UART and waits for first valid data.
+ * @return true if GPS data is being received, false otherwise.
+ */
 bool Rakieta::initGPS()
 {
   gpsSerial.begin(GPS_BAUNDRATE, SERIAL_8N1);
@@ -225,6 +241,11 @@ bool Rakieta::initGPS()
   return false;
 }
 
+/**
+ * @brief Updates LED1 and LED2 state based on timeouts.
+ * @param now Current millis() value.
+ * @return void
+ */
 void Rakieta::updateLeds(const uint32_t now)
 {
   if (led1IsOn && led1OffTime < now)
@@ -241,6 +262,11 @@ void Rakieta::updateLeds(const uint32_t now)
   }
 }
 
+/**
+ * @brief Updates buzzer state based on timeout.
+ * @param now Current millis() value.
+ * @return void
+ */
 void Rakieta::updateBuzzer(const uint32_t now)
 {
   if (buzzerIsOn && buzzerOffTime < now)
@@ -251,6 +277,11 @@ void Rakieta::updateBuzzer(const uint32_t now)
   }
 }
 
+/**
+ * @brief Updates solenoid1 and solenoid2 state based on timeouts.
+ * @param now Current millis() value.
+ * @return void
+ */
 void Rakieta::updateSolenoid(const uint32_t now)
 {
   if (solenoid1IsOn && solenoid1OffTime < now)
@@ -268,6 +299,10 @@ void Rakieta::updateSolenoid(const uint32_t now)
   }
 }
 
+/**
+ * @brief Performs a full system reset using NVIC reset.
+ * @return void
+ */
 void Rakieta::systemReset()
 {
   lora.clearDio1Action();
@@ -276,6 +311,11 @@ void Rakieta::systemReset()
   NVIC_SystemReset();
 }
 
+/**
+ * @brief Puts the system into sleep mode for a given time using HAL.
+ * @param time Sleep duration in milliseconds.
+ * @return void
+ */
 void Rakieta::systemSleep(const uint32_t time)
 {
   // delay(time);
@@ -285,6 +325,10 @@ void Rakieta::systemSleep(const uint32_t time)
   HAL_ResumeTick();
 }
 
+/**
+ * @brief Reads DIP switches and sets the current system mode (DEBUG, FLIGHT, DUMP, SLEEP).
+ * @return void
+ */
 void Rakieta::setSystemMode()
 {
   uint8_t m1 = digitalRead(MODE1) == LOW ? 0 : 1;
@@ -304,6 +348,10 @@ void Rakieta::setSystemMode()
   }
 }
 
+/**
+ * @brief Prints the current system mode to debug serial.
+ * @return void
+ */
 void Rakieta::printSystemMode() const
 {
   debug("[SYSTEM MODE] ");
@@ -313,10 +361,14 @@ void Rakieta::printSystemMode() const
     case SystemMode::FLIGHT: debugln("FLIGHT");          break;
     case SystemMode::DUMP:   debugln("DUMP");            break;
     case SystemMode::SLEEP:  debugln("SLEEP");           break;
-    default:                 debugln("!! INCORRECT !!"); break
+    default:                 debugln("!! INCORRECT !!"); break;
   }
 }
 
+/**
+ * @brief Prints the current flight state (IDLE, BOOST, COAST, APOGEE, DESCENT, LANDED) to debug serial.
+ * @return void
+ */
 void Rakieta::printFlightMode() const
 {
   debug("[FLIGHT MODE] ");
@@ -328,16 +380,24 @@ void Rakieta::printFlightMode() const
     case FlightState::APOGEE:  debugln("APOGEE");          break;
     case FlightState::DESCENT: debugln("DESCENT");         break;
     case FlightState::LANDED:  debugln("LANDED");          break;
-    default:                   debugln("!! INCORRECT !!"); break
+    default:                   debugln("!! INCORRECT !!"); break;
   }
 }
 
+/**
+ * @brief Reads battery voltage from analog pin and stores it in data structure.
+ * @return void
+ */
 void Rakieta::handleBattery()
 {
   float rawValue = analogRead(BATTERY);
   data.battery.voltage = (static_cast<float>(rawValue) * BATTERY_FULL_VOLTAGE / BATTERY_MAX_READ);
 }
 
+/**
+ * @brief Reads LSM6DSO sensor data, applies offsets, integrates acceleration and updates data structure.
+ * @return void
+ */
 void Rakieta::handleLsm()
 {
   sensors_event_t accel, gyro, temp;
@@ -387,6 +447,10 @@ void Rakieta::handleLsm()
     errorFlags |= LSM_ERROR;
 }
 
+/**
+ * @brief Reads ADXL375 sensor data, applies offsets, integrates acceleration and updates data structure.
+ * @return void
+ */
 void Rakieta::handleAdxl()
 {
   sensors_event_t event;
@@ -426,6 +490,10 @@ void Rakieta::handleAdxl()
     errorFlags |= ADXL_ERROR;
 }
 
+/**
+ * @brief Reads first BMP388 sensor data (pressure, altitude, temperature) and updates vertical speed.
+ * @return void
+ */
 void Rakieta::handleBmp1()
 {
   if (bmp1.performReading())
@@ -467,6 +535,10 @@ void Rakieta::handleBmp1()
     errorFlags |= BMP1_ERROR;
 }
 
+/**
+ * @brief Reads second BMP388 sensor data (pressure, altitude, temperature) and updates vertical speed.
+ * @return void
+ */
 void Rakieta::handleBmp2()
 {
   if (bmp2.performReading())
@@ -508,6 +580,10 @@ void Rakieta::handleBmp2()
     errorFlags |= BMP2_ERROR;
 }
 
+/**
+ * @brief Reads and parses GPS data, updates position, altitude, time, speed, course, satellites and HDOP.
+ * @return void
+ */
 void Rakieta::handleGPS()
 {
   while (gpsSerial.available())
@@ -575,6 +651,10 @@ void Rakieta::handleGPS()
   }
 }
 
+/**
+ * @brief Calls all sensor handlers (battery, LSM, ADXL, BMP1, BMP2, GPS) to update raw data.
+ * @return void
+ */
 void Rakieta::readSensorsData()
 {
   handleBattery();
@@ -585,6 +665,10 @@ void Rakieta::readSensorsData()
   handleGPS();
 }
 
+/**
+ * @brief Prints all current sensor and filtered data to debug serial.
+ * @return void
+ */
 void Rakieta::printData() const
 {
   debugf("IMU: Accel: %.2f %.2f %.2f G | Gyro: %.2f %.2f %.2f dps | Temp: %.2f *C\n",
@@ -619,6 +703,10 @@ void Rakieta::printData() const
 
 }
 
+/**
+ * @brief Resets all sensor offsets to zero and sets offsetsSet flag to false.
+ * @return void
+ */
 void Rakieta::resetOffsets()
 {
   memset(&offsets, 0, sizeof(offsets));
@@ -626,6 +714,10 @@ void Rakieta::resetOffsets()
   debugln("[OFFSETS] Reset complete..");
 }
 
+/**
+ * @brief Measures sensor offsets by averaging multiple readings (sensors and GPS).
+ * @return void
+ */
 void Rakieta::setOffsets()
 {
   static uint32_t lastOffestSensorsTime = 0;
@@ -719,6 +811,12 @@ void Rakieta::setOffsets()
   offsetsSet = true;
 }
 
+/**
+ * @brief Prepares a GPS offset message string into the provided buffer.
+ * @param buffer Destination buffer.
+ * @param bufferSize Size of the buffer.
+ * @return void
+ */
 void Rakieta::prepareGpsOffset(char* buffer, const size_t bufferSize)
 {
   if (!offsetsSet) return;
@@ -741,6 +839,12 @@ void Rakieta::prepareGpsOffset(char* buffer, const size_t bufferSize)
   }
 }
 
+/**
+ * @brief Prepares a detailed offsets message string into the provided buffer.
+ * @param buffer Destination buffer.
+ * @param bufferSize Size of the buffer.
+ * @return void
+ */
 void Rakieta::prepareOffsetsMsg(char* buffer, const size_t bufferSize)
 {
   if (!offsetsSet) return;
@@ -782,6 +886,12 @@ void Rakieta::prepareOffsetsMsg(char* buffer, const size_t bufferSize)
   }
 }
 
+/**
+ * @brief Prepares a data line message (CSV-like) with all current telemetry values into the buffer.
+ * @param buffer Destination buffer.
+ * @param bufferSize Size of the buffer.
+ * @return void
+ */
 void Rakieta::prepareDataLineMsg(char* buffer, const size_t bufferSize)
 {
   if (buffer == nullptr || bufferSize <= 0) return;
@@ -841,6 +951,10 @@ void Rakieta::prepareDataLineMsg(char* buffer, const size_t bufferSize)
   }
 }
 
+/**
+ * @brief Applies a low-pass filter to gyroscope data (from LSM).
+ * @return void
+ */
 void Rakieta::filterGyro()
 {
   if (errorFlags & LSM_ERROR) return;
@@ -849,14 +963,22 @@ void Rakieta::filterGyro()
   data.filtered.gz = FUSION_ALPHA * data.lsm.gz + (1.0f - FUSION_ALPHA) * data.filtered.gz;
 }
 
+/**
+ * @brief Calculates roll and pitch angles from filtered accelerometer data.
+ * @return void
+ */
 void Rakieta::calculateOrientation()
 {
   data.filtered.pitch = atan2(-data.filtered.ax, sqrt(data.filtered.ay*data.filtered.ay + data.filtered.az*data.filtered.az)) * 180 / 3.1415f;
   data.filtered.roll = atan2(data.filtered.ay, data.filtered.az) * 180 / 3.1415f;
 }
 
+/**
+ * @brief Fuses accelerometer data from LSM and ADXL with adaptive weights, then applies low-pass filter.
+ * @return void
+ */
 void Rakieta::filterAccel()
-{ && (millis() - data.lsm.lastTime) < 500U
+{
   float fusedAx = 0.0f, fusedAy = 0.0f, fusedAz = 0.0f;
   float totalWeight = 0.0f;
   float mach = data.filtered.speed / SPEED_OF_SOUND;
@@ -899,6 +1021,10 @@ void Rakieta::filterAccel()
   }
 }
 
+/**
+ * @brief Fuses speed data from barometers, LSM, ADXL and GPS with adaptive weights, then filters.
+ * @return void
+ */
 void Rakieta::filterSpeed()
 {
   float currentSpeed = data.filtered.speed;
@@ -950,6 +1076,10 @@ void Rakieta::filterSpeed()
   }
 }
 
+/**
+ * @brief Fuses altitude data from barometers, LSM, ADXL and GPS with adaptive weights, then filters.
+ * @return void
+ */
 void Rakieta::filterAlti()
 {
   float fusedAlti = 0.0f;
@@ -1002,6 +1132,10 @@ void Rakieta::filterAlti()
   }
 }
 
+/**
+ * @brief Initializes LoRa module with predefined frequency, bandwidth, spreading factor etc.
+ * @return true if initialization succeeded, false otherwise.
+ */
 bool Rakieta::initLora()
 {
   int16_t state = lora.begin(FREQUENCY, BANDWIDTH, SF, CODING_RATE, RADIOLIB_SX126X_SYNC_WORD_PRIVATE, POWER, PREAMBLE_LENGTH);
@@ -1020,11 +1154,21 @@ bool Rakieta::initLora()
   return false;
 }
 
+/**
+ * @brief Static function called by LoRa DIO1 interrupt to set operationDone flag.
+ * @return void
+ */
 void Rakieta::setOperationFlag()
 {
   operationDone = true;
 }
 
+/**
+ * @brief Prepares a LoRa status message string into the provided buffer.
+ * @param buffer Destination buffer.
+ * @param bufferSize Size of the buffer.
+ * @return void
+ */
 void Rakieta::prepareLoraStatusMsg(char* buffer, const size_t bufferSize)
 {
   if (buffer == nullptr || bufferSize <= 0) return;
@@ -1048,6 +1192,10 @@ void Rakieta::prepareLoraStatusMsg(char* buffer, const size_t bufferSize)
   }
 }
 
+/**
+ * @brief Builds the binary telemetry packet by adding all fields to BitStorage.
+ * @return void
+ */
 void Rakieta::preparePacket()
 {
   message.clean();
@@ -1059,6 +1207,8 @@ void Rakieta::preparePacket()
   message.add(uint16_t(errorFlags), errorPos, errorLen);
   message.add(uint8_t(currentMode), statusPos, statusLen);
   message.add(uint8_t(currentFlightState), flightstatusPos, flightstatusLen);
+  message.add(uint8_t(drogueDeployed ? 1 : 0), drogueParachutePos, drogueParachuteLen);
+  message.add(uint8_t(mainDeployed ? 1 : 0), mainParachutePos, mainParachuteLen);
 
   message.add(int32_t(data.gps.lat * 100000), gpsLatPos, gpsLatLen, true);
   message.add(int32_t(data.gps.lng * 100000), gpsLngPos, gpsLngLen, true);
@@ -1115,6 +1265,10 @@ void Rakieta::preparePacket()
   message.add(int16_t(data.filtered.pitch), filteredPitchPos, filteredPitchLen, true);
 }
 
+/**
+ * @brief Increments packet counter, prepares packet, sends it via LoRa and turns on LED1.
+ * @return void
+ */
 void Rakieta::sendPacket()
 {
   packet++;
@@ -1142,6 +1296,12 @@ void Rakieta::sendPacket()
   debugln("Sending DONE");
 }
 
+/**
+ * @brief Transmits a binary message via LoRa (non-blocking, with timeout and busy check).
+ * @param msg Pointer to data bytes.
+ * @param len Length of data in bytes.
+ * @return void
+ */
 void Rakieta::transmit(const uint8_t* msg, const size_t len)
 {
   static uint32_t loraMsgStartTime= 0;
@@ -1168,7 +1328,7 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
   
   operationDone = false;
 
-  debug(F("Sending: "));
+  debug("Sending: ");
   Serial.write(msg, len);
   debugln();
 
@@ -1177,7 +1337,7 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
 
   if (state != RADIOLIB_ERR_NONE)
   {
-    debug(F("Transmit error: "));
+    debug("Transmit error: ");
     debugln(state);
     errorFlags |= LORA_ERROR;
     operationDone = true;
@@ -1186,6 +1346,12 @@ void Rakieta::transmit(const uint8_t* msg, const size_t len)
   __enable_irq();
 }
 
+/**
+ * @brief Overload to transmit a null-terminated string.
+ * @param msg Pointer to string.
+ * @param len Length of string in bytes.
+ * @return void
+ */
 void Rakieta::transmit(const char* msg, const size_t len)
 {
   if (msg == nullptr) return;
@@ -1194,16 +1360,25 @@ void Rakieta::transmit(const char* msg, const size_t len)
   transmit(buf, len);
 }
 
+/**
+ * @brief Puts LoRa into continuous receive mode.
+ * @return void
+ */
 void Rakieta::startListening()
 {
   int16_t state = lora.startReceive();
   if (state != RADIOLIB_ERR_NONE)
   {
-    debug(F("Error starting listening: "));
+    debug("Error starting listening: ");
     debugln(state);
   }
 }
 
+/**
+ * @brief Parses and executes a command received via LoRa or UART.
+ * @param command Null-terminated string containing the command and optional argument.
+ * @return void
+ */
 void Rakieta::handleCommand(const char* command)
 {
   if (command == nullptr) return;
@@ -1341,6 +1516,10 @@ void Rakieta::handleCommand(const char* command)
   }
 }
 
+/**
+ * @brief Handles received LoRa packet, checks header (0xFF66), logs and dispatches command.
+ * @return void
+ */
 void Rakieta::checkRadio()
 {
   uint8_t buffer[50];
@@ -1350,17 +1529,26 @@ void Rakieta::checkRadio()
   if (state == RADIOLIB_ERR_NONE)
   {
     size_t len = lora.getPacketLength();
+    if (len <= 2) return;
     if (len < sizeof(buffer)) buffer[len] = '\0';
     else buffer[sizeof(buffer) - 1] = '\0';
 
-    char logBuf[128];
+    if (buffer[0] == 0x66 && buffer[1] == 0xFF)
+    {
+      // Pomijamy nagłówek, reszta to komenda
+      char* cmd = reinterpret_cast<char*>(buffer + 2);
+      // Zabezpieczenie przed brakiem null termination
+      if (len - 2 < sizeof(buffer) - 2) cmd[len - 2] = '\0';
 
-    snprintf(logBuf, sizeof(logBuf), "RX: %s | RSSI=%.1f SNR=%.1f", reinterpret_cast<char*>(buffer), lora.getRSSI(), lora.getSNR());
-    debugln(logBuf);
+      char logBuf[128];
+      snprintf(logBuf, sizeof(logBuf), "RX: %s | RSSI=%.1f SNR=%.1f", cmd, lora.getRSSI(), lora.getSNR());
+      debugln(logBuf);
+      flashWriteString(logBuf);
 
-    flashWriteString(logBuf);
-    handleCommand(reinterpret_cast<char*>(buffer));
-    errorFlags &= ~LORA_ERROR;
+      logEvent("Radio command received");
+      handleCommand(cmd);
+      errorFlags &= ~LORA_ERROR;
+    }
   }
   else if (state != RADIOLIB_ERR_RX_TIMEOUT)
   {
@@ -1368,13 +1556,17 @@ void Rakieta::checkRadio()
   }
   else
   {
-    debug(F("Data reading error: "));
+    debug("Data reading error: ");
     debugln(state);
     errorFlags |= LORA_ERROR;
   }
   startListening();
 }
 
+/**
+ * @brief Initializes flash memory and mounts FAT filesystem (formats if needed).
+ * @return true if successful, false otherwise.
+ */
 bool Rakieta::initFlash()
 {
   if (!flash.begin())
@@ -1409,6 +1601,12 @@ bool Rakieta::initFlash()
   return true;
 }
 
+/**
+ * @brief Finds the next available file number for a new data file (e.g., data_xxxx.csv).
+ * @param fileName Buffer to receive the generated file name.
+ * @param bufferSize Size of the buffer.
+ * @return true if a free file number was found, false if limit reached.
+ */
 bool Rakieta::flashFindNextFileNumber(char* fileName, const size_t bufferSize)
 {
   if (fileName == nullptr || bufferSize < 14) return false;
@@ -1432,6 +1630,10 @@ bool Rakieta::flashFindNextFileNumber(char* fileName, const size_t bufferSize)
   return false;
 }
 
+/**
+ * @brief Finds the highest existing file number among data_xxxx.csv files.
+ * @return Maximum file number found, or 0 if none.
+ */
 uint16_t Rakieta::findMaxFileNumber()
 {
   File32 root = fatfs.open("/");
@@ -1467,6 +1669,10 @@ uint16_t Rakieta::findMaxFileNumber()
   return maxNumber;
 }
 
+/**
+ * @brief Opens a new data file for writing (with next free number) and writes CSV header.
+ * @return true if file opened successfully, false otherwise.
+ */
 bool Rakieta::flashOpenNewFile()
 {
   if (flashDataFile.isOpen()) flashCloseFile();
@@ -1489,14 +1695,16 @@ bool Rakieta::flashOpenNewFile()
   watchdog();
   
   /// trzeba pozmieniać te nagłówki
-  flashWriteString("timestamp,packet,status,error,"
+  flashWriteString("timestamp,packet,error,status,flightStatus,"
                  "gps_lat,gps_lng,gps_alt,gps_h,gps_m,gps_s,gps_c,"
                  "gps_speed,gps_course,gps_satNum,gps_hdop,"
-                 "lsm_ax,lsm_ay,lsm_az,lsm_gx,lsm_gy,lsm_gz,lsm_temp,lsm_speed,"
-                 "adxl_ax,adxl_ay,adxl_az,adxl_speed,"
+                 "lsm_ax,lsm_ay,lsm_az,lsm_gx,lsm_gy,lsm_gz,lsm_temp,lsm_alti,lsm_speed,lsm_accel,"
+                 "adxl_ax,adxl_ay,adxl_az,adxl_alti,adxl_speed,adxl_accel,"
                  "bmp1_temp,bmp1_press,bmp1_alt,bmp1_speed,"
                  "bmp2_temp,bmp2_press,bmp2_alt,bmp2_speed,"
-                 "max_temp,battery");
+                 "battery,"
+                 "filtered_ax,filtered_ay,filtered_az,filtered_gx,filtered_gy,filtered_gz,"
+                 "filtered_alti,filtered_speed,filtered_accel,filtered_roll,filtered_pitch");
   flashDataFile.flush();
   watchdog();
   
@@ -1506,6 +1714,11 @@ bool Rakieta::flashOpenNewFile()
   return true;
 }
 
+/**
+ * @brief Writes a string to the currently open flash file, flushes after every FLUSH_AFTER_WRITES.
+ * @param msg Null-terminated string to write.
+ * @return void
+ */
 void Rakieta::flashWriteString(const char* msg)
 {
   if (!flashDataFile)
@@ -1538,6 +1751,11 @@ void Rakieta::flashWriteString(const char* msg)
   }
 }
 
+/**
+ * @brief Writes a log message prefixed with "#LOG:" to the flash file.
+ * @param msg Log message string.
+ * @return void
+ */
 void Rakieta::writeLogToFlash(const char* msg)
 {
   if (!flashDataFile)
@@ -1552,6 +1770,10 @@ void Rakieta::writeLogToFlash(const char* msg)
   flashWriteString(logLine);
 }
 
+/**
+ * @brief Forces a flush of the flash file buffer.
+ * @return void
+ */
 void Rakieta::flashFlushBuffer()
 {
   if (flashDataFile.isOpen())
@@ -1563,6 +1785,10 @@ void Rakieta::flashFlushBuffer()
   }
 }
 
+/**
+ * @brief Closes the current flash file (flushes buffer first).
+ * @return void
+ */
 void Rakieta::flashCloseFile()
 {
   if (flashDataFile.isOpen())
@@ -1575,6 +1801,10 @@ void Rakieta::flashCloseFile()
   }
 }
 
+/**
+ * @brief Lists all CSV files on flash to debug serial.
+ * @return void
+ */
 void Rakieta::flashDumpFileList()
 {
   debugln("\n=== FLASH FILE LIST ===");
@@ -1612,6 +1842,11 @@ void Rakieta::flashDumpFileList()
   debugln("========================\n");
 }
 
+/**
+ * @brief Prints the content of a specified data file to debug serial.
+ * @param fileNumber Four-digit file number (e.g., 12 -> 0012).
+ * @return void
+ */
 void Rakieta::flashDumpFileData(const uint16_t fileNumber)
 {
   char filename[32];
@@ -1647,6 +1882,10 @@ void Rakieta::flashDumpFileData(const uint16_t fileNumber)
   debugln("=== END OF FILE ===\n");
 }
 
+/**
+ * @brief Dumps the last (highest numbered) data file to debug serial.
+ * @return void
+ */
 void Rakieta::flashDumpLastFile()
 {
   uint16_t lastNumber = findMaxFileNumber();
@@ -1658,6 +1897,10 @@ void Rakieta::flashDumpLastFile()
   flashDumpFileData(lastNumber);
 }
 
+/**
+ * @brief Detects launch based on filtered acceleration threshold with debounce.
+ * @return true if launch is detected, false otherwise.
+ */
 bool Rakieta::detectLaunch()
 {
   if (isnan(data.filtered.accel) || isinf(data.filtered.accel) || !isfinite(data.filtered.accel)) return false;
@@ -1673,6 +1916,10 @@ bool Rakieta::detectLaunch()
   return false;
 }
 
+/**
+ * @brief Detects motor burnout when filtered acceleration drops below threshold.
+ * @return true if burnout is detected, false otherwise.
+ */
 bool Rakieta::detectBurnout()
 {
   if (isnan(data.filtered.accel) || isinf(data.filtered.accel) || !isfinite(data.filtered.accel)) return false;
@@ -1688,6 +1935,10 @@ bool Rakieta::detectBurnout()
   return false;
 }
 
+/**
+ * @brief Detects apogee when filtered speed is below threshold and altitude has reached maximum.
+ * @return true if apogee detected, false otherwise.
+ */
 bool Rakieta::detectApogee()
 {
   if (isnan(data.filtered.speed) || isinf(data.filtered.speed) || !isfinite(data.filtered.speed) ||
@@ -1706,6 +1957,10 @@ bool Rakieta::detectApogee()
   return false;
 }
 
+/**
+ * @brief Detects landing when filtered speed is near zero for a debounce period.
+ * @return true if landing detected, false otherwise.
+ */
 bool Rakieta::detectLanding()
 {
   if (isnan(data.filtered.speed) || isinf(data.filtered.speed) || !isfinite(data.filtered.speed)) return false;
@@ -1721,6 +1976,11 @@ bool Rakieta::detectLanding()
   return false;
 }
 
+/**
+ * @brief Checks if conditions for deploying a parachute are met (speed and altitude limits, drogue prerequisite for main).
+ * @param type Type of parachute (DROGUE or MAIN).
+ * @return true if deployment allowed, false otherwise.
+ */
 bool Rakieta::checkDeploymentConditions(const ParachuteType type) const
 {
   if (type == ParachuteType::DROGUE)
@@ -1736,6 +1996,10 @@ bool Rakieta::checkDeploymentConditions(const ParachuteType type) const
   return false;
 }
 
+/**
+ * @brief Sends flight summary (timestamps of key events) via LoRa and writes to flash.
+ * @return void
+ */
 void Rakieta::sendFlightSummary()
 {
   uint32_t now = millis();
@@ -1755,6 +2019,10 @@ void Rakieta::sendFlightSummary()
   debugln(buffer);
 }
 
+/**
+ * @brief Activates solenoid1 to deploy drogue parachute (sets timer).
+ * @return void
+ */
 void Rakieta::drogueParashuteOpen()
 {
   solenoid1IsOn = true;
@@ -1762,6 +2030,10 @@ void Rakieta::drogueParashuteOpen()
   digitalWrite(SOLENOID_1, HIGH);
 }
 
+/**
+ * @brief Activates solenoid2 to deploy main parachute (sets timer).
+ * @return void
+ */
 void Rakieta::mainParashuteOpen()
 {
   solenoid2IsOn = true;
@@ -1769,6 +2041,10 @@ void Rakieta::mainParashuteOpen()
   digitalWrite(SOLENOID_2, HIGH);
 }
 
+/**
+ * @brief State machine for flight phase transitions (IDLE -> BOOST -> COAST -> APOGEE -> DESCENT -> LANDED).
+ * @return void
+ */
 void Rakieta::updateFlightState()
 {
   static bool inFlight = false;
@@ -1850,6 +2126,10 @@ void Rakieta::updateFlightState()
   }
 }
 
+/**
+ * @brief Initializes the independent watchdog (IWDG) with 8-second timeout.
+ * @return void
+ */
 void Rakieta::initWatchdog()
 {
   static bool watchdogInitialized = false;
@@ -1864,6 +2144,10 @@ void Rakieta::initWatchdog()
   watchdogInitialized = true;
 }
 
+/**
+ * @brief Refreshes the watchdog counter if enough time has passed.
+ * @return void
+ */
 void Rakieta::watchdog()
 {
   static uint32_t lastWatchdogTime = 0;
@@ -1876,6 +2160,11 @@ void Rakieta::watchdog()
   }
 }
 
+/**
+ * @brief Attempts to reinitialize a component by calling its init function.
+ * @param initFunc Pointer to member function that initializes the component.
+ * @return void
+ */
 void Rakieta::reinitComponent(bool (Rakieta::*initFunc)())
 {
   debugln("[ERROR] Reinit component");
@@ -1885,6 +2174,10 @@ void Rakieta::reinitComponent(bool (Rakieta::*initFunc)())
   else debugln("[ERROR] Component recovery FAILED");
 }
 
+/**
+ * @brief Checks error flags and tries to recover failed components (LoRa, flash, sensors) in flight mode.
+ * @return void
+ */
 void Rakieta::handleErrors()
 {
   if (currentFlightState == FlightState::BOOST || currentFlightState == FlightState::COAST) return;
@@ -1914,6 +2207,10 @@ void Rakieta::handleErrors()
   watchdog();
 }
 
+/**
+ * @brief Reads serial commands from USB and executes them.
+ * @return void
+ */
 void Rakieta::handleSerialCommands()
 {
   if (Serial.available())
@@ -1928,7 +2225,10 @@ void Rakieta::handleSerialCommands()
   }
 }
 
-// === Obsługa trybów ===
+/**
+ * @brief Main handler for DEBUG mode: reads sensors, prints data, sends packet and responds to commands.
+ * @return void
+ */
 void Rakieta::handleDebugMode()
 {
   static bool wypisanie = false;
@@ -1955,6 +2255,10 @@ void Rakieta::handleDebugMode()
   sendPacket();  /// opcjonalnie
 }
 
+/**
+ * @brief Main handler for FLIGHT mode: reads sensors, filters, updates flight state, logs data and sends packet.
+ * @return void
+ */
 void Rakieta::handleFlightMode()
 {
   checkRadio();
@@ -1982,6 +2286,11 @@ void Rakieta::handleFlightMode()
   }
 }
 
+/**
+ * @brief Main handler for DUMP mode: prints menu, reads user input and dumps flash files.
+ * @param now Current millis() value.
+ * @return void
+ */
 void Rakieta::handleDumpMode(const uint32_t now)
 {
   static enum DumpState {
@@ -2071,6 +2380,11 @@ void Rakieta::handleDumpMode(const uint32_t now)
   watchdog();
 }
 
+/**
+ * @brief Main handler for SLEEP mode: enters sleep, wakes up to check DIP switch and resets if mode changed.
+ * @param now Current millis() value.
+ * @return void
+ */
 void Rakieta::handleSleepMode(const uint32_t now)
 {
   SystemMode oldMode = currentMode;
@@ -2090,6 +2404,11 @@ void Rakieta::handleSleepMode(const uint32_t now)
   systemSleep(5000);
 }
 
+/**
+ * @brief Dispatches the appropriate mode handler based on current system mode.
+ * @param now Current millis() value.
+ * @return void
+ */
 void Rakieta::handleMode(const uint32_t now)
 {
   static uint32_t lastFlightLoop = 0;
@@ -2134,6 +2453,10 @@ void Rakieta::handleMode(const uint32_t now)
   }
 }
 
+/**
+ * @brief Performs full system initialisation: GPIO, SPI, sensors, LoRa, flash, sets system mode.
+ * @return void
+ */
 void Rakieta::init()
 {
   debugln("\n=== ROCKET ON-BOARD COMPUTER INIT ===\n");
@@ -2161,15 +2484,19 @@ void Rakieta::init()
 
   for (uint8_t i=0; i<ile; i++)
   {
-    digitalWrite(LED_1, HIGH);
+    digitalWrite(LED_2, HIGH);
     systemSleep(200);
-    digitalWrite(LED_1, LOW);
+    digitalWrite(LED_2, LOW);
     systemSleep(200);
   }
   
   debugln("\n=== INICJALIZACJA ZAKOŃCZONA ===\n");
 }
 
+/**
+ * @brief Main loop: error handling, mode handling, updates LEDs, buzzer, solenoids and sleeps briefly.
+ * @return void
+ */
 void Rakieta::loop()
 {
   static uint32_t lastErrorCheckTime = 0;

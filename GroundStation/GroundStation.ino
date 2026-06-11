@@ -78,7 +78,9 @@ void loop()
         cmdBuffer[idx] = '\0';
 
         uint8_t txBuf[64];
-        memcpy(txBuf, cmdBuffer, idx);
+        txBuf[0] = 0x66;
+        txBuf[1] = 0xFF;
+        memcpy(txBuf + 2, cmdBuffer, idx);
 
         radio.clearDio1Action();
         radio.transmit(txBuf, idx);

@@ -11,13 +11,14 @@
   #define debugf(...)   Serial.printf(__VA_ARGS__)
 #else
   #define debugInit(x)
-  #define debug(x)
-  #define debugln(x)
+  #define debug(x)      writeLogToFlash(x)
+  #define debugln(x)    writeLogToFlash(x)
   #define debugBin(x)
   #define debugHex(x)
   #define debugf(...)
 #endif
 
+#define BV8(x)         (uint8_t(1u) << (x))
 #define BV16(x)         (uint16_t(1u) << (x))
 
 
@@ -233,8 +234,12 @@ constexpr uint16_t statusPos                          = (errorPos + errorLen);
 constexpr uint16_t statusLen                          = 3;
 constexpr uint16_t flightstatusPos                    = (statusPos + statusLen);
 constexpr uint16_t flightstatusLen                    = 3;
+constexpr uint16_t drogueParachutePos                 = (flightstatusPos + flightstatusLen);
+constexpr uint16_t drogueParachuteLen                 = 1;
+constexpr uint16_t mainParachutePos                   = (drogueParachutePos + drogueParachuteLen);
+constexpr uint16_t mainParachuteLen                   = 1;
 
-constexpr uint16_t gpsLatPos                          = (flightstatusPos + flightstatusLen);
+constexpr uint16_t gpsLatPos                          = (mainParachutePos + mainParachuteLen);
 constexpr uint16_t gpsLatLen                          = (17+1);
 constexpr uint16_t gpsLngPos                          = (gpsLatPos + gpsLatLen);
 constexpr uint16_t gpsLngLen                          = (17+1);
